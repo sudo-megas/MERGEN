@@ -28,35 +28,6 @@
 namespace mergen {
 namespace {
 
-/// Inverts a page's lightness, holding its hue and saturation.
-///
-/// Straight RGB inversion is one call and would have been cheaper, but it turns
-/// every photograph into a negative and every red chart cyan, which is why so
-/// many tools offering a dark PDF mode are unusable on anything but plain text.
-///
-/// In HSL the chroma C = (1 - |2L-1|) * S is unchanged by L -> 1-L, so only the
-/// offset m = L - C/2 moves, and the whole transform collapses to adding
-/// 255 - (max + min) to every channel. It is its own inverse, so toggling twice
-/// returns the original image exactly.
-QImage invertLightness(const QImage &in) {
-    QImage out = in.convertToFormat(QImage::Format_RGB32);
-    const int height = out.height();
-    const int width = out.width();
-    for (int y = 0; y < height; ++y) {
-        auto *line = reinterpret_cast<QRgb *>(out.scanLine(y));
-        for (int x = 0; x < width; ++x) {
-            const QRgb pixel = line[x];
-            const int r = qRed(pixel);
-            const int g = qGreen(pixel);
-            const int b = qBlue(pixel);
-            const int shift = 255 - (std::max({r, g, b}) + std::min({r, g, b}));
-            line[x] = qRgb(std::clamp(r + shift, 0, 255), std::clamp(g + shift, 0, 255),
-                           std::clamp(b + shift, 0, 255));
-        }
-    }
-    return out;
-}
-
 /// Whether transitions are drawn at all.
 ///
 /// MZ.md asked for animation to be skipped when the platform reports that the
@@ -90,6 +61,7 @@ constexpr int kPeekSlopPx = 6;
 } // namespace
 
 PageView::PageView(QWidget *parent) : QAbstractScrollArea(parent) {
+    applyCursor();
     viewport()->setAutoFillBackground(false);
     setFrameShape(QFrame::NoFrame);
     setFocusPolicy(Qt::StrongFocus);
@@ -240,11 +212,14 @@ void PageView::relayout() {
         y += h + kPageGap;
     }
 
-    m_content = QSize(widest, y);
+    // The content is wider than the widest page by a gap on each side, so the
+    // paper floats rather than butting against the window — all four edges of
+    // every page are visible at any scroll position.
+    m_content = QSize(widest + 2 * kPageGap, y);
 
     // Centre each page horizontally within the content width.
     for (QRect &rect : m_layout) {
-        rect.moveLeft((widest - rect.width()) / 2);
+        rect.moveLeft((m_content.width() - rect.width()) / 2);
     }
 
     const QSize view = viewport()->size();
@@ -297,6 +272,13 @@ QPair<int, int> PageView::visibleRange() const {
     return {first, last};
 }
 
+double PageView::renderRatio() const {
+    // The viewport's own ratio, not the primary screen's: a window dragged to a
+    // second monitor gets that monitor's density.
+    const double ratio = viewport()->devicePixelRatioF();
+    return ratio > 0.0 ? ratio : 1.0;
+}
+
 const QImage &PageView::cachedPage(int index) {
     auto it = m_cache.find(index);
     if (it == m_cache.end()) {
@@ -304,13 +286,67 @@ const QImage &PageView::cachedPage(int index) {
         // page rendered inverted and a page rendered plainly are not the same
         // image, so the cache is dropped whenever the mode changes rather than
         // being asked to hold both — see setNightMode.
-        QImage page = m_doc->renderPage(index, m_zoom, m_rotation);
+        // Render at the screen's real pixel density, not at logical size. On a
+        // 2x display the page was being rasterised at half the pixels it would
+        // occupy and then scaled up by the compositor, which is what made the
+        // text look like it had never heard of antialiasing — poppler's own
+        // antialiasing was on the whole time and simply had half the pixels to
+        // work with.
+        //
+        // setDevicePixelRatio then tells QPainter the image is worth more than
+        // its pixel count, so drawImage places it at the same logical size as
+        // before. Every coordinate elsewhere — layout, selection, search hits,
+        // diff bands — stays in logical space and needs no change at all.
+        const double ratio = renderRatio();
+        QImage page = m_doc->renderPage(index, m_zoom * ratio, m_rotation);
         if (m_night && !page.isNull()) {
             page = invertLightness(page);
+        }
+        if (!page.isNull()) {
+            page.setDevicePixelRatio(ratio);
         }
         it = m_cache.insert(index, page);
     }
     return it.value();
+}
+
+void PageView::paintPageEdge(QPainter &painter, const QRect &page) const {
+    // Where one page ends and the next begins, without a rule drawn across the
+    // view. A sheet of paper on a surface is legible because it has an edge and
+    // it casts a shadow; continuous scrolling loses that unless it is drawn.
+    //
+    // Presentation mode draws neither: the surround is black, and the point of
+    // that mode is that nothing but the page is visible.
+    if (m_presenting) {
+        return;
+    }
+
+    const QColor surround = surroundColour();
+    const bool darkSurround = surround.lightness() < 128;
+
+    // Both colours come from palette roles rather than being named here, so they
+    // follow the reader's theme and there is no second set of colour rules to
+    // keep in step — the same discipline the rest of the view is held to.
+    QColor edge = palette().color(QPalette::Mid);
+    // Against a dark surround the palette's Mid can be darker than the paper it
+    // is meant to separate, which would hide the edge instead of drawing it.
+    if (darkSurround && edge.lightness() < surround.lightness()) {
+        edge = palette().color(QPalette::Midlight);
+    }
+
+    // The shadow: three hairlines of falling opacity down and to the right. Not
+    // a blur — this is a widget repainted on every scroll pixel, and three
+    // rectangles cost nothing measurable.
+    QColor shadow = palette().color(QPalette::Shadow);
+    for (int depth = 3; depth >= 1; --depth) {
+        shadow.setAlpha(darkSurround ? 22 * depth : 14 * depth);
+        painter.fillRect(page.adjusted(depth, depth, depth, depth), shadow);
+    }
+
+    painter.setPen(edge);
+    painter.setBrush(Qt::NoBrush);
+    // Outside the page, so no rendered pixel is covered by its own border.
+    painter.drawRect(page.adjusted(-1, -1, 0, 0));
 }
 
 QColor PageView::surroundColour() const {
@@ -509,6 +545,14 @@ void PageView::paintEvent(QPaintEvent *event) {
     // the page count.
     dropPagesOutside(first, last);
 
+    // A window moved to a screen of different density has a cache full of
+    // images rendered for the old one. They would still paint, at the wrong
+    // sharpness, until something else happened to evict them.
+    if (!qFuzzyCompare(m_cacheRatio, renderRatio())) {
+        m_cacheRatio = renderRatio();
+        m_cache.clear();
+    }
+
     const QPoint origin = contentOrigin();
     for (int i = first; i <= last; ++i) {
         const QRect target = m_layout.at(i).translated(origin);
@@ -519,6 +563,7 @@ void PageView::paintEvent(QPaintEvent *event) {
         if (image.isNull()) {
             continue;
         }
+        paintPageEdge(painter, target);
         painter.drawImage(target.topLeft(), image);
         paintSelection(painter, i, origin);
         paintSearchHits(painter, i, origin);
@@ -585,6 +630,31 @@ const PageLink *PageView::linkAt(const QPoint &viewportPoint) {
     return nullptr;
 }
 
+void PageView::setMouseMode(MouseMode mode) {
+    if (m_mouseMode == mode) {
+        return;
+    }
+    m_mouseMode = mode;
+    // Leaving select mode with a selection standing would leave it highlighted
+    // and unreachable — the gesture that made it no longer does anything.
+    if (mode == MouseMode::Pan) {
+        clearSelection();
+        viewport()->update();
+    }
+    applyCursor();
+    Q_EMIT mouseModeChanged(mode);
+}
+
+void PageView::applyCursor() {
+    if (m_panning) {
+        viewport()->setCursor(Qt::ClosedHandCursor);
+    } else if (m_mouseMode == MouseMode::Pan) {
+        viewport()->setCursor(Qt::OpenHandCursor);
+    } else {
+        viewport()->setCursor(Qt::IBeamCursor);
+    }
+}
+
 void PageView::mousePressEvent(QMouseEvent *event) {
     if (event->button() == Qt::LeftButton && noticeRect().contains(event->position().toPoint())) {
         Q_EMIT noticeClicked();
@@ -600,10 +670,25 @@ void PageView::mousePressEvent(QMouseEvent *event) {
             return;
         }
     }
+    // Panning: the left button in pan mode, and the middle button in either —
+    // a middle-drag is the one gesture that means "move this" everywhere, and
+    // honouring it costs nothing.
+    const bool wantsPan = !m_layout.isEmpty() &&
+                          ((event->button() == Qt::LeftButton && m_mouseMode == MouseMode::Pan) ||
+                           event->button() == Qt::MiddleButton);
+    if (wantsPan) {
+        m_panning = true;
+        m_panFrom = event->position().toPoint();
+        applyCursor();
+        event->accept();
+        return;
+    }
+
     if (event->button() == Qt::LeftButton && !m_layout.isEmpty()) {
         const Position position = positionAt(event->position().toPoint());
         m_selectionAnchor = position;
         m_selectionCursor = position;
+        m_pressPoint = event->position().toPoint();
         m_dragging = true;
         viewport()->update();
         event->accept();
@@ -883,6 +968,19 @@ void PageView::mouseMoveEvent(QMouseEvent *event) {
         m_peekTimer->stop();
         m_peekPage = -1;
     }
+    if (m_panning) {
+        // The page follows the pointer, so dragging left moves the page left,
+        // which means scrolling right. Both axes, so a page wider than the
+        // window can be reached without touching a scrollbar.
+        const QPoint now = event->position().toPoint();
+        const QPoint moved = now - m_panFrom;
+        m_panFrom = now;
+        stopScrollAnimations();
+        verticalScrollBar()->setValue(verticalScrollBar()->value() - moved.y());
+        horizontalScrollBar()->setValue(horizontalScrollBar()->value() - moved.x());
+        event->accept();
+        return;
+    }
     if (!m_dragging) {
         QAbstractScrollArea::mouseMoveEvent(event);
         return;
@@ -896,6 +994,12 @@ void PageView::mouseMoveEvent(QMouseEvent *event) {
 }
 
 void PageView::mouseReleaseEvent(QMouseEvent *event) {
+    if (m_panning && (event->button() == Qt::LeftButton || event->button() == Qt::MiddleButton)) {
+        m_panning = false;
+        applyCursor();
+        event->accept();
+        return;
+    }
     if (m_peekTimer->isActive() || m_peeking) {
         m_peekTimer->stop();
         if (m_peeking) {
@@ -908,6 +1012,16 @@ void PageView::mouseReleaseEvent(QMouseEvent *event) {
     }
     if (m_dragging && event->button() == Qt::LeftButton) {
         m_dragging = false;
+        // A click is not a selection. positionAt snaps to the nearest word, so
+        // pressing empty space used to leave that word highlighted with no
+        // obvious way to clear it. Measured by distance rather than by comparing
+        // the two ends: dragging across a single word gives the same word index
+        // at both, and that IS a selection.
+        const int moved = (event->position().toPoint() - m_pressPoint).manhattanLength();
+        if (moved < QApplication::startDragDistance()) {
+            clearSelection();
+            viewport()->update();
+        }
         event->accept();
         return;
     }

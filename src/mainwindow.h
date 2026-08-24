@@ -5,6 +5,7 @@
 #pragma once
 
 #include <QByteArray>
+#include <QFont>
 #include <QMainWindow>
 #include <QPair>
 #include <QPointer>
@@ -17,6 +18,7 @@
 
 class QAction;
 class QLabel;
+class QSlider;
 class QProgressBar;
 class QPushButton;
 class QThread;
@@ -33,6 +35,7 @@ class Control;
 class Document;
 class Overlay;
 class PageView;
+class ThumbnailStrip;
 class SearchWorker;
 
 class MainWindow : public QMainWindow {
@@ -71,6 +74,18 @@ private:
 
     /// Re-renders every toolbar icon against the current palette. Called when
     /// the theme changes: a pixmap tinted for the old palette is wrong.
+    void resizeEvent(QResizeEvent *event) override;
+    void buildStatusBar();
+    void updateStatusBar();
+    /// "0644  -rw-r--r--" for a path, or empty if it cannot be stat'd.
+    static QString permissionText(const QString &path);
+    /// "Created …\nModified …" for a path. Says so plainly when the filesystem
+    /// records no creation time, rather than substituting the change time.
+    static QString dateText(const QString &path);
+    /// A fixed-pitch font that can actually render bold, or the interface font
+    /// if this system has none — see the definition for why that is not assumed.
+    static QFont boldMonospaceFont();
+    void addToolBarGap();
     void applyIcons();
 
     /// Enables and disables toolbar actions against what is actually possible
@@ -82,6 +97,12 @@ private:
     void dropEvent(QDropEvent *event) override;
 
     void updateTitle();
+
+    /// The zoom slider is logarithmic: its middle is life size, not half of the
+    /// maximum. These convert between its ticks and a zoom factor.
+    double zoomForTick(int tick) const;
+    int tickForZoom(double zoom) const;
+    void updateZoomReadout(double zoom);
     void closeDocument(const QString &message = QString());
     void showError(const QString &message);
 
@@ -229,6 +250,31 @@ private:
     /// queue between pages so its progress dialog can paint. Anything that
     /// would replace the document while that loop is running has to wait.
     bool m_printing = false;
+
+    ThumbnailStrip *m_thumbs = nullptr;
+    QAction *m_thumbsAction = nullptr;
+    QAction *m_aboutAction = nullptr;
+    QAction *m_panAction = nullptr;
+    QLabel *m_statusPath = nullptr;
+    QLabel *m_statusMode = nullptr;
+    QLabel *m_statusDates = nullptr;
+    QSlider *m_zoomSlider = nullptr;
+    QLabel *m_zoomLabel = nullptr;
+    /// Set while writing the view's zoom back into the slider, so the slider's
+    /// own valueChanged does not feed it straight back to the view.
+    bool m_reflectingZoom = false;
+    static constexpr int kZoomTicks = 1000;
+    /// The page view against the preview strip's 1, giving the strip about a
+    /// fifth of the row. Restored after a comparison, which wants equal halves.
+    static constexpr int kViewStretch = 4;
+    /// Whitespace between toolbar groups, in place of a drawn rule.
+    static constexpr int kToolBarGap = 10;
+    /// Padding above, below and at each end of the status bar's text.
+    static constexpr int kStatusPad = 5;
+    /// How much larger the status bar's text runs than the interface font. It
+    /// carries the two facts a reader checks at a glance, so it is set to be
+    /// read from a normal sitting distance rather than squinted at.
+    static constexpr double kStatusScale = 1.25;
 };
 
 } // namespace mergen

@@ -33,6 +33,16 @@ struct Word;
 
 /// How the zoom factor is chosen. Fit modes are recomputed on every resize;
 /// Fixed is whatever the user last dialled in.
+/// What the left mouse button does on the page.
+enum class MouseMode {
+    /// Drag selects text. The reading mode.
+    Select,
+    /// Drag moves the page under the pointer, in any direction. The mode for a
+    /// page too large to fit, where reaching for two scrollbars is the wrong
+    /// gesture.
+    Pan,
+};
+
 enum class ZoomMode {
     Fixed,
     FitWidth,
@@ -57,6 +67,9 @@ public:
     double zoom() const { return m_zoom; }
     Poppler::Page::Rotation rotation() const { return m_rotation; }
     ZoomMode zoomMode() const { return m_zoomMode; }
+
+    MouseMode mouseMode() const { return m_mouseMode; }
+    void setMouseMode(MouseMode mode);
 
     void setZoom(double factor);
     void zoomIn();
@@ -147,6 +160,10 @@ public:
     static constexpr double kZoomStep = 0.10;
 
 Q_SIGNALS:
+    /// The mode changed — by the toolbar, the keybinding, or a middle-drag
+    /// ending. MainWindow keeps its button in step with this.
+    void mouseModeChanged(MouseMode mode);
+
     void zoomChanged(double factor);
     void pageChanged(int index);
     void noticeClicked();
@@ -200,6 +217,14 @@ private:
     };
 
     const QVector<Word> &wordsOf(int page);
+
+    /// The pixel density the page images are rasterised at — the viewport's
+    /// devicePixelRatio, or 1.0 if the platform reports nothing useful.
+    double renderRatio() const;
+
+    /// The edge and shadow that make a page read as a sheet of paper lying on a
+    /// surface, rather than as one length of scrolling content.
+    void paintPageEdge(QPainter &painter, const QRect &page) const;
     const QVector<PageLink> &linksOf(int page);
 
     /// Moves a scrollbar to \a value, eased, or immediately when the platform
@@ -248,7 +273,7 @@ private:
 
     /// Gap between consecutive pages, and the margin around the column, in
     /// device pixels at any zoom.
-    static constexpr int kPageGap = 12;
+    static constexpr int kPageGap = 22;
 
     /// Pages rendered beyond the viewport on each side, per MX.md Â§8.
     static constexpr int kRenderMargin = 1;
@@ -276,6 +301,23 @@ private:
     /// Word boxes per page. Unlike the render cache these do not depend on
     /// zoom, so they survive a zoom change and are dropped only on rotation.
     QHash<int, QVector<Word>> m_words;
+
+    /// The density m_cache was rendered at, so moving the window to a screen of
+    /// different density can drop it rather than paint it soft.
+    double m_cacheRatio = 1.0;
+
+    /// Where the left button went down, so release can tell a click from a drag.
+    QPoint m_pressPoint;
+
+    MouseMode m_mouseMode = MouseMode::Select;
+    /// Set while the page is being dragged. Separate from m_dragging, which is
+    /// the selection's own drag.
+    bool m_panning = false;
+    /// Where the pointer was on the previous move, in viewport coordinates.
+    QPoint m_panFrom;
+    /// Restores the pointer after a middle-button pan, which works in either
+    /// mode and must put back whatever the mode had set.
+    void applyCursor();
 
     /// Link areas per page, on the same terms as the words: points, current
     /// orientation, so they survive a zoom and are dropped on a rotation.

@@ -14,6 +14,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_AUTOMOC ON)
+set(CMAKE_AUTORCC ON)
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
@@ -53,7 +54,10 @@ add_executable(mergen
     src/control.cpp
     src/control.h
     src/redact.cpp
-    src/redact.h)
+    src/redact.h
+    src/thumbstrip.cpp
+    src/thumbstrip.h
+    data/mergen.qrc)
 
 target_compile_definitions(mergen PRIVATE
     MERGEN_VERSION="${PROJECT_VERSION}"

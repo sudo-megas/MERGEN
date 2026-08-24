@@ -1,3 +1,7 @@
+// MERGEN needs statx for a file's creation time; glibc gates it on _GNU_SOURCE.
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
 // MERGEN — a minimal PDF viewer.
 // Copyright (C) 2026 MEGAS.
 // SPDX-License-Identifier: GPL-3.0-only
@@ -8,6 +12,7 @@
 #include "iconset.h"
 #include "overlay.h"
 #include "pageview.h"
+#include "thumbstrip.h"
 #include "redact.h"
 #include "license.h"
 
@@ -33,9 +38,15 @@
 #include <QScrollBar>
 #include <QKeyEvent>
 #include <QDialog>
+#include <QFrame>
 #include <QDialogButtonBox>
 #include <QPainter>
 #include <QPlainTextEdit>
+#include <QSlider>
+#include <cmath>
+#include <QFontInfo>
+#include <QDateTime>
+#include <QStatusBar>
 #include <QProgressDialog>
 #include <QPrintDialog>
 #include <QPrinter>
@@ -55,6 +66,7 @@
 #include <QSaveFile>
 #include <QStandardPaths>
 
+#include <fcntl.h>
 #include <sys/stat.h>
 #include <QToolBar>
 #include <QToolButton>
@@ -80,6 +92,10 @@ constexpr int kPrintDpiCap = 600;
 /// states. Proportions, not colours: the hue is always the reader's own.
 constexpr int kHoverAlpha = 46;
 constexpr int kPressedAlpha = 82;
+/// A checked toggle. Stronger than hover, because hover is a passing state and
+/// this one has to hold the reader's attention while it stays on — it is the
+/// only thing on the bar that says which mouse mode is active.
+constexpr int kCheckedAlpha = 112;
 
 /// A toolbar button that draws its own hover and pressed background.
 ///
@@ -107,15 +123,42 @@ protected:
 
         const bool pressed = isEnabled() && (option.state & QStyle::State_Sunken);
         const bool hovered = isEnabled() && (option.state & QStyle::State_MouseOver);
+        // State_On is the checked state of a checkable action. This painter used
+        // to ignore it entirely, so a toggle that was on looked exactly like one
+        // that was off — the button gave no sign which mouse mode was active.
+        const bool checked = isEnabled() && (option.state & QStyle::State_On);
 
-        if (pressed || hovered) {
+        if (pressed || hovered || checked) {
             QColor wash = palette().color(QPalette::Highlight);
-            wash.setAlpha(pressed ? kPressedAlpha : kHoverAlpha);
+            // A checked button being hovered or clicked should still respond, so
+            // the states add rather than one replacing the other.
+            int alpha = 0;
+            if (checked) {
+                alpha = kCheckedAlpha;
+            }
+            if (pressed) {
+                alpha = qMax(alpha, kPressedAlpha) + (checked ? kHoverAlpha : 0);
+            } else if (hovered) {
+                alpha = qMax(alpha + (checked ? kHoverAlpha / 2 : 0), kHoverAlpha);
+            }
+            wash.setAlpha(qMin(alpha, 255));
             const qreal radius = height() * 0.18;
             painter.setRenderHint(QPainter::Antialiasing, true);
             painter.setPen(Qt::NoPen);
             painter.setBrush(wash);
             painter.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), radius, radius);
+
+            // A checked toggle also carries an outline, so it survives a theme
+            // whose highlight is close to the toolbar's own background — the
+            // wash alone would be invisible there.
+            if (checked) {
+                QColor edge = palette().color(QPalette::Highlight);
+                edge.setAlpha(200);
+                painter.setPen(edge);
+                painter.setBrush(Qt::NoBrush);
+                painter.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), radius,
+                                        radius);
+            }
             painter.setRenderHint(QPainter::Antialiasing, false);
         }
 
@@ -222,14 +265,24 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     row->setContentsMargins(0, 0, 0, 0);
     row->setSpacing(1);
 
+    // The previews take about a fifth of the row, the page the rest. Stretch
+    // rather than a fixed width, so the proportion survives any window size.
+    m_thumbs = new ThumbnailStrip(m_viewRow);
+    row->addWidget(m_thumbs, 1);
+
     m_view = new PageView(m_viewRow);
     m_overlay = new Overlay(m_view);
-    row->addWidget(m_view, 1);
+    row->addWidget(m_view, kViewStretch);
+
+    connect(m_thumbs, &ThumbnailStrip::pageChosen, this,
+            [this](int page) { m_view->scrollToPage(page); });
 
     buildSearchBar();
     column->addWidget(m_searchBar);
     column->addWidget(m_viewRow, 1);
     setCentralWidget(central);
+
+    buildStatusBar();
 
     m_watcher = new QFileSystemWatcher(this);
     connect(m_watcher, &QFileSystemWatcher::fileChanged, this, [this](const QString &) {
@@ -238,6 +291,11 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     });
     connect(m_view, &PageView::noticeClicked, this, &MainWindow::reloadDocument);
     connect(m_view, &PageView::pageChanged, this, &MainWindow::onPageChanged);
+    connect(m_view, &PageView::pageChanged, this, [this](int page) {
+        if (m_thumbs) {
+            m_thumbs->setCurrentPage(page);
+        }
+    });
     connect(m_view, &PageView::searchHitsChanged, this, [this](int, int) { updateSearchStatus(); });
     connect(m_view, &PageView::linkPeekRequested, this, &MainWindow::peekPage);
     connect(m_view, &PageView::linkPeekEnded, this, [this] {
@@ -320,18 +378,7 @@ void MainWindow::buildToolBar() {
     openButton->setPopupMode(QToolButton::MenuButtonPopup);
     rebuildRecentMenu();
 
-    m_toolBar->addSeparator();
-
-    m_zoomOutAction = new QAction(this);
-    m_zoomOutAction->setShortcut(QKeySequence::ZoomOut);
-    connect(m_zoomOutAction, &QAction::triggered, m_view, &PageView::zoomOut);
-    addGlyphAction(m_zoomOutAction, glyphs::kZoomOut, tr("Zoom out"));
-
-    m_zoomInAction = new QAction(this);
-    // QKeySequence::ZoomIn is Ctrl++, which most keyboards produce as Ctrl+=.
-    m_zoomInAction->setShortcuts({QKeySequence::ZoomIn, QKeySequence(QStringLiteral("Ctrl+="))});
-    connect(m_zoomInAction, &QAction::triggered, m_view, &PageView::zoomIn);
-    addGlyphAction(m_zoomInAction, glyphs::kZoomIn, tr("Zoom in"));
+    addToolBarGap();
 
     // F and Shift+F are handled in the page view's key handler, not as
     // window-wide shortcuts: a single-letter shortcut is dispatched before the
@@ -345,7 +392,45 @@ void MainWindow::buildToolBar() {
     connect(m_fitPageAction, &QAction::triggered, m_view, &PageView::setFitPage);
     addGlyphAction(m_fitPageAction, glyphs::kFitPage, tr("Fit page"), QStringLiteral("Shift+F"));
 
-    m_toolBar->addSeparator();
+    m_thumbsAction = new QAction(this);
+    m_thumbsAction->setCheckable(true);
+    m_thumbsAction->setChecked(true);
+    m_thumbsAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+B")));
+    connect(m_thumbsAction, &QAction::triggered, this, [this](bool on) {
+        if (m_thumbs) {
+            m_thumbs->setVisible(on);
+        }
+    });
+    // Icon only. The two application-level controls are secondary to the
+    // document ones beside them, and the bar has to survive a narrow window
+    // without folding the page counter into an overflow menu. The action still
+    // carries its text for assistive technology — that is Z1's rule, and it is
+    // about the action, not about what the button chooses to draw.
+    m_panAction = new QAction(this);
+    m_panAction->setCheckable(true);
+    m_panAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+H")));
+    connect(m_panAction, &QAction::triggered, this, [this](bool on) {
+        m_view->setMouseMode(on ? MouseMode::Pan : MouseMode::Select);
+        if (m_compareView) {
+            m_compareView->setMouseMode(on ? MouseMode::Pan : MouseMode::Select);
+        }
+    });
+    // The view can change the mode without the button — a middle-drag, or the
+    // keybinding while the button is not focused — so the button follows it
+    // rather than being the only thing that knows.
+    connect(m_view, &PageView::mouseModeChanged, this,
+            [this](MouseMode mode) { m_panAction->setChecked(mode == MouseMode::Pan); });
+    // Icon only, like the other two toggles. A mode is confirmed by the pointer
+    // changing shape, which is a better signal than a word on a button.
+    QToolButton *panButton =
+        addGlyphAction(m_panAction, glyphs::kPan, tr("Move page"), QStringLiteral("Ctrl+H"));
+    panButton->setToolButtonStyle(Qt::ToolButtonIconOnly);
+
+    QToolButton *thumbsButton = addGlyphAction(m_thumbsAction, glyphs::kThumbnails,
+                                               tr("Page previews"), QStringLiteral("Ctrl+B"));
+    thumbsButton->setToolButtonStyle(Qt::ToolButtonIconOnly);
+
+    addToolBarGap();
 
     m_rotateAction = new QAction(this);
     m_rotateAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+R")));
@@ -361,6 +446,60 @@ void MainWindow::buildToolBar() {
     m_printAction->setShortcut(QKeySequence::Print);
     connect(m_printAction, &QAction::triggered, this, &MainWindow::printDocument);
     addGlyphAction(m_printAction, glyphs::kPrint, tr("Print"));
+
+    addToolBarGap();
+
+    // Zoom lives after the document controls: it is the one thing the reader
+    // adjusts continuously, and it ends the bar so the slider can be long.
+    m_zoomOutAction = new QAction(this);
+    m_zoomOutAction->setShortcut(QKeySequence::ZoomOut);
+    connect(m_zoomOutAction, &QAction::triggered, m_view, &PageView::zoomOut);
+    addGlyphAction(m_zoomOutAction, glyphs::kZoomOut, tr("Zoom out"));
+
+    m_zoomInAction = new QAction(this);
+    // QKeySequence::ZoomIn is Ctrl++, which most keyboards produce as Ctrl+=.
+    m_zoomInAction->setShortcuts({QKeySequence::ZoomIn, QKeySequence(QStringLiteral("Ctrl+="))});
+    connect(m_zoomInAction, &QAction::triggered, m_view, &PageView::zoomIn);
+    addGlyphAction(m_zoomInAction, glyphs::kZoomIn, tr("Zoom in"));
+
+    m_zoomSlider = new QSlider(Qt::Horizontal, m_toolBar);
+    m_zoomSlider->setRange(0, kZoomTicks);
+    // Expanding, and last in its group. It takes the bar's slack in place of the
+    // blank spacer that used to sit here, so it is as long as the window allows
+    // rather than as short as the bar could spare.
+    m_zoomSlider->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    // A short minimum, because the bar must still fit a 1000px window with the
+    // page counter visible. On any wider window the Expanding policy takes the
+    // slack and the slider is as long as there is room for.
+    m_zoomSlider->setMinimumWidth(48);
+    // Capped, because "expanding" on a wide screen means 780px of zoom slider,
+    // which is a control looking for something to do. Long enough to aim with.
+    m_zoomSlider->setMaximumWidth(260);
+    m_zoomSlider->setAccessibleName(tr("Zoom"));
+    m_zoomSlider->setToolTip(tr("Zoom"));
+    m_zoomSlider->setFocusPolicy(Qt::NoFocus); // Never steals the arrow keys.
+    connect(m_zoomSlider, &QSlider::valueChanged, this, [this](int tick) {
+        if (m_reflectingZoom) {
+            return; // We put that value there ourselves.
+        }
+        m_view->setZoom(zoomForTick(tick));
+    });
+    m_zoomLabel = new QLabel(m_toolBar);
+    m_zoomLabel->setAccessibleName(tr("Zoom level"));
+    m_zoomLabel->setMinimumWidth(46);
+    m_zoomLabel->setAlignment(Qt::AlignCenter);
+    m_toolBar->addWidget(m_zoomLabel);
+    m_toolBar->addWidget(m_zoomSlider);
+
+    // Whatever the slider does not take, so the page counter and About stay
+    // pinned to the right edge.
+    auto *slack = new QWidget(m_toolBar);
+    slack->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    slack->setAttribute(Qt::WA_TransparentForMouseEvents);
+    m_toolBar->addWidget(slack);
+
+    connect(m_view, &PageView::zoomChanged, this, &MainWindow::updateZoomReadout);
+    updateZoomReadout(m_view->zoom());
 
     // Counter-clockwise rotation is a keybinding only; §5 gives the toolbar one
     // rotate button.
@@ -434,8 +573,13 @@ void MainWindow::buildToolBar() {
 
     auto *nightAction = new QAction(this);
     nightAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+N")));
-    connect(nightAction, &QAction::triggered, this,
-            [this] { m_view->setNightMode(!m_view->isNightMode()); });
+    connect(nightAction, &QAction::triggered, this, [this] {
+        const bool on = !m_view->isNightMode();
+        m_view->setNightMode(on);
+        if (m_thumbs) {
+            m_thumbs->setNightMode(on);
+        }
+    });
     addAction(nightAction);
 
     auto *commandAction = new QAction(this);
@@ -466,9 +610,6 @@ void MainWindow::buildToolBar() {
     addAction(m_quitAction);
 
     // Everything after this spacer is right-aligned.
-    auto *spacer = new QWidget(m_toolBar);
-    spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-    m_toolBar->addWidget(spacer);
 
     m_pageEdit = new QLineEdit(m_toolBar);
     m_pageEdit->setAlignment(Qt::AlignRight);
@@ -484,11 +625,245 @@ void MainWindow::buildToolBar() {
     m_pageTotal->setAccessibleName(tr("Page count"));
     m_toolBar->addWidget(m_pageTotal);
 
+    addToolBarGap();
+
+    // Last on the bar, so it sits at the top right under the window's own close
+    // button. It is the only control here that is about the application rather
+    // than about the document, and it belongs at the end for that reason.
+    m_aboutAction = new QAction(this);
+    connect(m_aboutAction, &QAction::triggered, this, &MainWindow::showAbout);
+    QToolButton *aboutButton = addGlyphAction(m_aboutAction, glyphs::kAbout, tr("About"));
+    aboutButton->setToolButtonStyle(Qt::ToolButtonIconOnly);
+
     // Zoom bounds decide whether the two zoom buttons are still live.
     connect(m_view, &PageView::zoomChanged, this, [this](double) { updateActionStates(); });
 
     applyIcons();
     updateActionStates();
+}
+
+void MainWindow::resizeEvent(QResizeEvent *event) {
+    QMainWindow::resizeEvent(event);
+    // The path is elided to the label's width, so a wider window should show
+    // more of it rather than keep the cut made for the old one.
+    updateStatusBar();
+}
+
+void MainWindow::buildStatusBar() {
+    // What the reader has open, and what they are allowed to do with it. The
+    // path because a file name alone is ambiguous once two directories hold a
+    // report.pdf; the mode because this application can open files the account
+    // cannot write, and knowing that before trying to save is worth a line.
+    auto *bar = statusBar();
+    bar->setSizeGripEnabled(false);
+    // QStatusBar draws a frame around every item it holds, which at this size
+    // is a box round each word. The bar is one line of text, not a row of
+    // panels.
+    bar->setStyleSheet(QStringLiteral("QStatusBar::item { border: none; }"));
+    bar->setContentsMargins(kStatusPad, 0, kStatusPad, 0);
+
+    // Qt gives the status bar a font a size or two below the interface's, which
+    // is how a path and a permission string end up unreadable. Both are worth
+    // reading, so both are set to the interface font outright.
+    QFont uiFont = QApplication::font();
+    uiFont.setPointSizeF(uiFont.pointSizeF() * kStatusScale);
+    uiFont.setBold(true);
+
+    // The system's monospace font is not necessarily one that can be bold. Here
+    // it resolves to Andale Mono, which ships no bold face, and Qt does not
+    // synthesise one — asking for weight 700 gave back glyphs identical to
+    // weight 400, pixel for pixel and to the same advance width. So the family
+    // is chosen by whether it can actually do what is being asked of it.
+    QFont fixedFont = boldMonospaceFont();
+    fixedFont.setPointSizeF(uiFont.pointSizeF());
+    fixedFont.setBold(true);
+
+    // The dates carry two lines, so they run a little smaller than the single
+    // line either side of them and the three sections come out the same height.
+    QFont dateFont = QApplication::font();
+    dateFont.setPointSizeF(dateFont.pointSizeF() * kStatusScale * 0.86);
+    dateFont.setBold(true);
+
+    m_statusPath = new QLabel(bar);
+    m_statusPath->setTextFormat(Qt::PlainText);
+    m_statusPath->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    m_statusPath->setAccessibleName(tr("File path"));
+    m_statusPath->setFont(uiFont);
+    bar->addWidget(m_statusPath, 1);
+
+    // Centred between the path and the permissions, with equal stretch on each
+    // side so it stays in the middle rather than drifting with the path's
+    // length. Two lines, because the bar has the room for them.
+    m_statusDates = new QLabel(bar);
+    m_statusDates->setTextFormat(Qt::PlainText);
+    m_statusDates->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    m_statusDates->setAccessibleName(tr("File dates"));
+    m_statusDates->setFont(dateFont);
+    m_statusDates->setAlignment(Qt::AlignCenter);
+    bar->addWidget(m_statusDates, 0);
+
+    // Octal and symbolic sit together at the right, in one monospaced run so
+    // the columns line up from one document to the next.
+    m_statusMode = new QLabel(bar);
+    m_statusMode->setTextFormat(Qt::PlainText);
+    m_statusMode->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    m_statusMode->setAccessibleName(tr("File permissions"));
+    m_statusMode->setFont(fixedFont);
+    m_statusMode->setToolTip(tr("The file's permissions, as ls reports them"));
+    m_statusMode->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    // In the same flow as the path, with the same stretch, rather than as a
+    // permanent widget. A permanent widget is laid out after the stretch is
+    // shared, so the space either side of the dates was unequal and they sat
+    // 74px left of centre on a 1400px window.
+    bar->addWidget(m_statusMode, 1);
+
+    // Twice the single-line height it was, which is what the two date lines
+    // need and what makes the bar read as part of the window rather than as a
+    // strip left over at the bottom.
+    bar->setFixedHeight(2 * (QFontMetrics(uiFont).height() + kStatusPad));
+
+    updateStatusBar();
+}
+
+QFont MainWindow::boldMonospaceFont() {
+    // Cascadia first: it is already a hard dependency of this package, because
+    // the toolbar's icons are glyphs from it, so preferring it adds nothing to
+    // install. Then the system's own choice, then the usual Linux monospaces.
+    const QStringList candidates = {
+        QStringLiteral("CaskaydiaCove Nerd Font"),
+        QStringLiteral("Cascadia Code NF"),
+        QStringLiteral("Cascadia Code"),
+        QFontInfo(QFontDatabase::systemFont(QFontDatabase::FixedFont)).family(),
+        QStringLiteral("DejaVu Sans Mono"),
+        QStringLiteral("Liberation Mono"),
+        QStringLiteral("Noto Sans Mono"),
+    };
+
+    const QStringList installed = QFontDatabase::families();
+    for (const QString &family : candidates) {
+        if (family.isEmpty() || !installed.contains(family)) {
+            continue;
+        }
+        // Both conditions matter: a proportional font would lose the column
+        // alignment that makes two permission strings comparable at a glance,
+        // and a family with no bold face is the problem being solved.
+        const QFont probe(family);
+        if (!QFontInfo(probe).fixedPitch()) {
+            continue;
+        }
+        if (!QFontDatabase::styles(family).contains(QStringLiteral("Bold"), Qt::CaseInsensitive)) {
+            continue;
+        }
+        return QFont(family);
+    }
+
+    // Nothing monospaced can be bold on this system. Bold was asked for
+    // explicitly and column alignment was not, so the interface font wins.
+    return QApplication::font();
+}
+
+QString MainWindow::dateText(const QString &path) {
+    const auto when = [](qint64 seconds) {
+        return QDateTime::fromSecsSinceEpoch(seconds).toString(QStringLiteral("yyyy-MM-dd HH:mm"));
+    };
+
+    // statx rather than stat, because stat has no creation time to give: st_ctime
+    // is the inode's *change* time, which moves when permissions change and is
+    // routinely mistaken for this. Not every filesystem records a birth time, so
+    // the mask has to be checked rather than assumed — the field is present in
+    // the struct either way and holds nothing meaningful when unset.
+    struct statx sx{};
+    if (::statx(AT_FDCWD, path.toLocal8Bit().constData(), 0, STATX_BTIME | STATX_MTIME, &sx) == 0) {
+        const QString modified =
+            (sx.stx_mask & STATX_MTIME) ? when(qint64(sx.stx_mtime.tv_sec)) : QString();
+        if (sx.stx_mask & STATX_BTIME) {
+            return tr("Created   %1\nModified  %2")
+                .arg(when(qint64(sx.stx_btime.tv_sec)), modified);
+        }
+        if (!modified.isEmpty()) {
+            // Said plainly rather than filled in with the change time, which
+            // would be a different fact wearing this one's label.
+            return tr("Created   not recorded\nModified  %1").arg(modified);
+        }
+    }
+
+    struct stat info{};
+    if (::stat(path.toLocal8Bit().constData(), &info) == 0) {
+        return tr("Created   not recorded\nModified  %1").arg(when(qint64(info.st_mtime)));
+    }
+    return QString();
+}
+
+QString MainWindow::permissionText(const QString &path) {
+    struct stat info{};
+    if (::stat(path.toLocal8Bit().constData(), &info) != 0) {
+        return QString();
+    }
+
+    // The ls form, built from the mode bits rather than from Qt's permission
+    // flags — Qt reports what *this process* may do, which is not the same
+    // question and answers it wrongly for a file opened through pkexec.
+    const mode_t mode = info.st_mode;
+    QString rwx;
+    rwx.reserve(10);
+    rwx += S_ISDIR(mode) ? QLatin1Char('d') : S_ISLNK(mode) ? QLatin1Char('l') : QLatin1Char('-');
+    const mode_t bits[9] = {S_IRUSR, S_IWUSR, S_IXUSR, S_IRGRP, S_IWGRP,
+                            S_IXGRP, S_IROTH, S_IWOTH, S_IXOTH};
+    const char letters[9] = {'r', 'w', 'x', 'r', 'w', 'x', 'r', 'w', 'x'};
+    for (int i = 0; i < 9; ++i) {
+        rwx += (mode & bits[i]) ? QLatin1Char(letters[i]) : QLatin1Char('-');
+    }
+    // setuid, setgid and sticky replace the execute letter, as ls shows them.
+    const auto special = [&rwx, mode](int index, mode_t bit, char set, char unset) {
+        if (mode & bit) {
+            rwx[index] = (mode & (index == 3   ? S_IXUSR
+                                  : index == 6 ? S_IXGRP
+                                               : S_IXOTH))
+                             ? QLatin1Char(set)
+                             : QLatin1Char(unset);
+        }
+    };
+    special(3, S_ISUID, 's', 'S');
+    special(6, S_ISGID, 's', 'S');
+    special(9, S_ISVTX, 't', 'T');
+
+    const uint octal = mode & (S_ISUID | S_ISGID | S_ISVTX | 0777);
+    return QStringLiteral("%1  %2")
+        .arg(octal, (mode & (S_ISUID | S_ISGID | S_ISVTX)) ? 4 : 4, 8, QLatin1Char('0'))
+        .arg(rwx);
+}
+
+void MainWindow::updateStatusBar() {
+    if (!m_statusPath || !m_statusMode || !m_statusDates) {
+        return;
+    }
+    if (!m_doc->isOpen() && !m_doc->isLocked()) {
+        m_statusPath->setText(QString());
+        m_statusMode->setText(QString());
+        m_statusDates->setText(QString());
+        return;
+    }
+
+    const QString path = m_doc->path();
+    // Elided in the middle: the beginning says where in the tree it is and the
+    // end says which file it is, and a deep path would otherwise push the
+    // permissions off the bar entirely.
+    const QFontMetrics metrics(m_statusPath->font());
+    m_statusPath->setText(
+        metrics.elidedText(path, Qt::ElideMiddle, qMax(80, m_statusPath->width())));
+    m_statusPath->setToolTip(path);
+    m_statusMode->setText(permissionText(path));
+    m_statusDates->setText(dateText(path));
+}
+
+void MainWindow::addToolBarGap() {
+    // A gap rather than QToolBar::addSeparator. The separator draws a hairline
+    // rule, and at this icon size a stack of them reads as damage rather than as
+    // grouping — whitespace groups perfectly well on its own.
+    auto *gap = new QWidget(m_toolBar);
+    gap->setFixedWidth(kToolBarGap);
+    gap->setAttribute(Qt::WA_TransparentForMouseEvents);
+    m_toolBar->addWidget(gap);
 }
 
 void MainWindow::applyIcons() {
@@ -596,6 +971,10 @@ void MainWindow::openPath(const QString &path) {
 
     closeSearch();
     m_view->setDocument(m_doc.get());
+    if (m_thumbs) {
+        m_thumbs->setDocument(m_doc.get());
+    }
+    updateStatusBar();
     m_view->setNotice(QString());
     updateTitle();
     pushRecent(m_doc->path());
@@ -614,6 +993,10 @@ void MainWindow::closeDocument(const QString &message) {
     closeSearch();
     m_doc->close();
     m_view->setDocument(nullptr);
+    if (m_thumbs) {
+        m_thumbs->setDocument(nullptr);
+    }
+    updateStatusBar();
     m_view->setNotice(QString());
     m_view->setMessage(message);
     if (!m_watcher->files().isEmpty()) {
@@ -621,6 +1004,39 @@ void MainWindow::closeDocument(const QString &message) {
     }
     updateTitle();
     onPageChanged(-1);
+}
+
+double MainWindow::zoomForTick(int tick) const {
+    // Logarithmic, so the slider's middle is 100% rather than 500%. A linear
+    // map over 10%..1000% would spend nine tenths of its travel above life size.
+    const double lo = std::log(PageView::kMinZoom);
+    const double hi = std::log(PageView::kMaxZoom);
+    const double t = double(qBound(0, tick, kZoomTicks)) / kZoomTicks;
+    return std::exp(lo + t * (hi - lo));
+}
+
+int MainWindow::tickForZoom(double zoom) const {
+    const double lo = std::log(PageView::kMinZoom);
+    const double hi = std::log(PageView::kMaxZoom);
+    const double clamped = qBound(PageView::kMinZoom, zoom, PageView::kMaxZoom);
+    return qRound(kZoomTicks * (std::log(clamped) - lo) / (hi - lo));
+}
+
+void MainWindow::updateZoomReadout(double zoom) {
+    if (m_zoomLabel) {
+        // The true value, not the slider's clamped one: a fit mode on a very
+        // large page legitimately lands below kMinZoom, and the reader should
+        // be told what they are actually looking at.
+        m_zoomLabel->setText(tr("%1%").arg(qRound(zoom * 100.0)));
+    }
+    if (m_zoomSlider) {
+        // The slider has no position for a zoom below its range, so it rests at
+        // the bottom. Guarded, because moving the handle emits valueChanged and
+        // that would write the clamp back into the view.
+        m_reflectingZoom = true;
+        m_zoomSlider->setValue(tickForZoom(zoom));
+        m_reflectingZoom = false;
+    }
 }
 
 void MainWindow::updateTitle() {
@@ -1170,6 +1586,19 @@ void MainWindow::enterCompare(const QString &path) {
         return;
     }
 
+    // The previews step aside for a comparison. Two documents side by side want
+    // the whole row, and a strip that could only ever preview one of them would
+    // be telling half a story.
+    if (m_thumbs) {
+        m_thumbs->hide();
+    }
+    // The page view carries a stretch of 4 so the previews beside it take about
+    // a fifth. With the previews gone and a second document arriving, the two
+    // documents want equal halves.
+    if (auto *row = qobject_cast<QHBoxLayout *>(m_viewRow->layout())) {
+        row->setStretch(row->indexOf(m_view), 1);
+    }
+
     m_compareView = new PageView(m_viewRow);
     m_compareView->setDocument(m_compareDoc.get());
     m_compareView->setNightMode(m_view->isNightMode());
@@ -1197,6 +1626,12 @@ void MainWindow::enterCompare(const QString &path) {
 }
 
 void MainWindow::leaveCompare() {
+    if (m_thumbs && m_thumbsAction) {
+        m_thumbs->setVisible(m_thumbsAction->isChecked() && !m_view->isPresenting());
+    }
+    if (auto *row = qobject_cast<QHBoxLayout *>(m_viewRow->layout())) {
+        row->setStretch(row->indexOf(m_view), kViewStretch);
+    }
     if (!isComparing()) {
         return;
     }
@@ -1280,6 +1715,11 @@ void MainWindow::computeDiff() {
 }
 
 void MainWindow::setPresenting(bool on) {
+    // The previews are chrome, and presentation mode is the one place where
+    // nothing but the page belongs on screen.
+    if (m_thumbs) {
+        m_thumbs->setVisible(!on && m_thumbsAction && m_thumbsAction->isChecked());
+    }
     if (m_view->isPresenting() == on) {
         return;
     }
@@ -1560,13 +2000,18 @@ void MainWindow::peekPage(int page) {
         return;
     }
     const double target = height() * 0.45;
-    const QImage image = m_doc->renderPage(page, target / size.height(), m_view->rotation());
+    // At the screen's density, for the same reason the page view renders at it.
+    const double ratio = devicePixelRatioF() > 0.0 ? devicePixelRatioF() : 1.0;
+    const QImage image =
+        m_doc->renderPage(page, target * ratio / size.height(), m_view->rotation());
     if (image.isNull()) {
         return;
     }
 
     auto *label = new QLabel;
-    label->setPixmap(QPixmap::fromImage(image));
+    QPixmap pixmap = QPixmap::fromImage(image);
+    pixmap.setDevicePixelRatio(ratio);
+    label->setPixmap(pixmap);
     label->setAlignment(Qt::AlignCenter);
 
     m_overlay->present(tr("Page %1").arg(page + 1), label);
@@ -1758,29 +2203,116 @@ void MainWindow::showAbout() {
     dialog.setWindowTitle(tr("About MERGEN"));
 
     auto *column = new QVBoxLayout(&dialog);
+    column->setContentsMargins(28, 24, 28, 20);
+    column->setSpacing(0);
 
-    // Plain text throughout, and no link handling anywhere: the address is
-    // there to be read and copied, never to open a browser. MX.md §4.
-    auto *heading = new QLabel(&dialog);
-    heading->setTextFormat(Qt::PlainText);
-    heading->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
-    heading->setText(tr("MERGEN %1\n"
-                        "A minimal PDF viewer\n\n"
-                        "Made by MEGAS\n"
-                        "Released %2\n"
-                        "Source: github.com/sudo-megas/MERGEN\n\n"
-                        "Licensed under the GNU General Public License, version 3.")
-                         .arg(QStringLiteral(MERGEN_VERSION))
-                         .arg(QStringLiteral(MERGEN_RELEASE_DATE)));
-    column->addWidget(heading);
+    // The family's About layout: the mark, the maker, version, release date,
+    // source address, then the licence in full. Addresses are selectable and
+    // never clickable — that is the rule the whole family keeps, and it is why
+    // nothing here is a QLabel with rich text or an open-external-link flag.
+    const QColor ink = dialog.palette().color(QPalette::WindowText);
+    QColor quiet = ink;
+    quiet.setAlpha(140);
+
+    // The mark itself, above the wordmark.
+    auto *badge = new QLabel(&dialog);
+    const int badgeSize = 72;
+    QPixmap art = applicationIcon().pixmap(QSize(badgeSize, badgeSize), dialog.devicePixelRatioF());
+    art.setDevicePixelRatio(dialog.devicePixelRatioF());
+    badge->setPixmap(art);
+    badge->setAlignment(Qt::AlignHCenter);
+    column->addWidget(badge);
+    column->addSpacing(10);
+
+    auto *mark = new QLabel(QStringLiteral("MERGEN"), &dialog);
+    QFont markFont = mark->font();
+    markFont.setPointSizeF(markFont.pointSizeF() * 2.6);
+    markFont.setWeight(QFont::Light);
+    markFont.setLetterSpacing(QFont::AbsoluteSpacing, 6.0);
+    mark->setFont(markFont);
+    mark->setTextFormat(Qt::PlainText);
+    mark->setAlignment(Qt::AlignHCenter);
+    column->addWidget(mark);
+
+    // Bilingual, as the family's pages are.
+    auto *subtitle = new QLabel(tr("A minimal PDF viewer  ·  Sade bir PDF okuyucu"), &dialog);
+    QFont subtitleFont = subtitle->font();
+    subtitleFont.setLetterSpacing(QFont::AbsoluteSpacing, 1.2);
+    subtitle->setFont(subtitleFont);
+    subtitle->setTextFormat(Qt::PlainText);
+    subtitle->setAlignment(Qt::AlignHCenter);
+    {
+        QPalette p = subtitle->palette();
+        p.setColor(QPalette::WindowText, quiet);
+        subtitle->setPalette(p);
+    }
+    column->addSpacing(2);
+    column->addWidget(subtitle);
+    column->addSpacing(18);
+
+    auto *rule = new QFrame(&dialog);
+    rule->setFrameShape(QFrame::HLine);
+    rule->setFrameShadow(QFrame::Plain);
+    rule->setFixedHeight(1);
+    column->addWidget(rule);
+    column->addSpacing(16);
+
+    // One grid, so the values line up rather than sitting in a paragraph.
+    auto *facts = new QGridLayout;
+    facts->setHorizontalSpacing(18);
+    facts->setVerticalSpacing(6);
+    facts->setColumnStretch(1, 1);
+    const QVector<QPair<QString, QString>> rows = {
+        {tr("Version"), QStringLiteral(MERGEN_VERSION)},
+        {tr("Released"), QStringLiteral(MERGEN_RELEASE_DATE)},
+        {tr("Made by"), QStringLiteral("MEGAS")},
+        {tr("Source"), QStringLiteral("github.com/sudo-megas/MERGEN")},
+        {tr("Licence"), tr("GNU General Public License, version 3")},
+    };
+    for (int i = 0; i < rows.size(); ++i) {
+        auto *key = new QLabel(rows.at(i).first, &dialog);
+        key->setTextFormat(Qt::PlainText);
+        {
+            QPalette p = key->palette();
+            p.setColor(QPalette::WindowText, quiet);
+            key->setPalette(p);
+        }
+        auto *value = new QLabel(rows.at(i).second, &dialog);
+        value->setTextFormat(Qt::PlainText);
+        // Selectable so the address can be copied; never a link.
+        value->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
+        facts->addWidget(key, i, 0, Qt::AlignRight | Qt::AlignVCenter);
+        facts->addWidget(value, i, 1, Qt::AlignLeft | Qt::AlignVCenter);
+    }
+    column->addLayout(facts);
+    column->addSpacing(18);
 
     auto *licence = new QPlainTextEdit(&dialog);
     licence->setReadOnly(true);
     licence->setPlainText(QString::fromUtf8(kLicenseText));
     licence->setLineWrapMode(QPlainTextEdit::NoWrap);
     licence->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
-    licence->setMinimumSize(640, 360);
+    licence->setMinimumSize(620, 300);
+    // Without this the box asks for the width of the longest line it holds and
+    // the dialog obliges, which is where the sliver past the right edge came
+    // from — the window ended up wider than anything drawn into it.
+    licence->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Expanding);
     column->addWidget(licence, 1);
+    column->addSpacing(14);
+
+    auto *sign = new QLabel(tr("Built with Reason and Passion"), &dialog);
+    sign->setTextFormat(Qt::PlainText);
+    sign->setAlignment(Qt::AlignHCenter);
+    QFont signFont = sign->font();
+    signFont.setItalic(true);
+    sign->setFont(signFont);
+    {
+        QPalette p = sign->palette();
+        p.setColor(QPalette::WindowText, quiet);
+        sign->setPalette(p);
+    }
+    column->addWidget(sign);
+    column->addSpacing(12);
 
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
     connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);

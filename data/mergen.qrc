@@ -1,0 +1,11 @@
+<!DOCTYPE RCC>
+<RCC version="1.0">
+  <qresource prefix="/icons">
+    <file alias="mergen-16.png">icons/mergen-16.png</file>
+    <file alias="mergen-32.png">icons/mergen-32.png</file>
+    <file alias="mergen-48.png">icons/mergen-48.png</file>
+    <file alias="mergen-64.png">icons/mergen-64.png</file>
+    <file alias="mergen-128.png">icons/mergen-128.png</file>
+    <file alias="mergen-256.png">icons/mergen-256.png</file>
+  </qresource>
+</RCC>

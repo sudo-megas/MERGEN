@@ -21,6 +21,12 @@
 
 namespace mergen {
 
+/// Inverts an image's lightness while leaving hue and saturation alone, so a red
+/// chart stays red. Its own inverse: applying it twice returns the original
+/// exactly. Shared by the page view and the thumbnail strip, so the colour maths
+/// lives in one place — the derivation is with the definition.
+QImage invertLightness(const QImage &in);
+
 /// One word of extracted text and where it sits on the page, in points, in the
 /// rotated coordinate space that was asked for.
 struct Word {

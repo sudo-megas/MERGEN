@@ -1,6 +1,7 @@
-# CMake writes into build/, but build/docs/ is tracked source.
+# CMake writes into build/, but build/docs/ and build/icons/ are tracked source.
 /build/*
 !/build/docs/
+!/build/icons/
 
 # Package artefacts from makepkg run in-tree.
 /pkg/

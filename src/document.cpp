@@ -4,6 +4,8 @@
 
 #include "document.h"
 
+#include <algorithm>
+
 #include <QCryptographicHash>
 #include <QScopeGuard>
 #include <cstring>
@@ -18,6 +20,36 @@
 #include <utility>
 
 namespace mergen {
+
+/// Inverts a page's lightness, holding its hue and saturation.
+///
+/// Straight RGB inversion is one call and would have been cheaper, but it turns
+/// every photograph into a negative and every red chart cyan, which is why so
+/// many tools offering a dark PDF mode are unusable on anything but plain text.
+///
+/// In HSL the chroma C = (1 - |2L-1|) * S is unchanged by L -> 1-L, so only the
+/// offset m = L - C/2 moves, and the whole transform collapses to adding
+/// 255 - (max + min) to every channel. It is its own inverse, so toggling twice
+/// returns the original image exactly.
+QImage invertLightness(const QImage &in) {
+    QImage out = in.convertToFormat(QImage::Format_RGB32);
+    const int height = out.height();
+    const int width = out.width();
+    for (int y = 0; y < height; ++y) {
+        auto *line = reinterpret_cast<QRgb *>(out.scanLine(y));
+        for (int x = 0; x < width; ++x) {
+            const QRgb pixel = line[x];
+            const int r = qRed(pixel);
+            const int g = qGreen(pixel);
+            const int b = qBlue(pixel);
+            const int shift = 255 - (std::max({r, g, b}) + std::min({r, g, b}));
+            line[x] = qRgb(std::clamp(r + shift, 0, 255), std::clamp(g + shift, 0, 255),
+                           std::clamp(b + shift, 0, 255));
+        }
+    }
+    return out;
+}
+
 namespace {
 /// Ceiling on a single rendered page, in bytes. Poppler stops honouring
 /// allocations near 2^31 and starts returning 1x1 instead of failing, so the

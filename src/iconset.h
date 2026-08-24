@@ -17,6 +17,11 @@ namespace mergen {
 /// Written as escapes rather than literal characters: these live in the Unicode
 /// private use area, where they render as nothing in most editors and are
 /// silently dropped by tools that do not expect them.
+/// The application's own mark, at every size that ships. Embedded rather than
+/// looked up, so it is present before the package is installed and cannot go
+/// missing on a system with no icon theme.
+QIcon applicationIcon();
+
 namespace glyphs {
 constexpr char16_t kOpen = u'\uF07C';
 constexpr char16_t kZoomOut = u'\uF010';
@@ -26,6 +31,12 @@ constexpr char16_t kFitPage = u'\uF065';
 constexpr char16_t kRotate = u'\uF01E';
 constexpr char16_t kSearch = u'\uF002';
 constexpr char16_t kPrint = u'\uF02F';
+/// A 2x2 grid — the page previews down the side.
+constexpr char16_t kThumbnails = u'\uF009';
+/// An 'i' in a circle — the About page.
+constexpr char16_t kAbout = u'\uF05A';
+/// Four arrows — grab the page and move it.
+constexpr char16_t kPan = u'\uF047';
 constexpr char16_t kClose = u'\uF00D';
 } // namespace glyphs
 

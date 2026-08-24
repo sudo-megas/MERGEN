@@ -15,6 +15,17 @@
 #include <QStringList>
 
 namespace mergen {
+
+QIcon applicationIcon() {
+    static const QIcon icon = [] {
+        QIcon built;
+        for (int size : {16, 32, 48, 64, 128, 256}) {
+            built.addFile(QStringLiteral(":/icons/mergen-%1.png").arg(size));
+        }
+        return built;
+    }();
+    return icon;
+}
 namespace {
 
 /// Fraction of the icon box the glyph's ink is scaled to fill. Below 1 so that

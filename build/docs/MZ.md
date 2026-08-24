@@ -191,6 +191,22 @@ Everything in v1.0 §3 remains, unchanged, and is not restated. Added:
 Authored by the user. Nothing is added to or removed from this list without a
 ruling. This section supersedes `MX.md` §4.
 
+> [!NOTE]
+> **Amended at Z12, 24/08/2026.** Three entries below are struck rather than
+> deleted, on the author's ruling: *"dont bother about forbiddances. i allow
+> you."* They were the rules against a persistent side panel, against a page
+> thumbnails panel, and against a status bar.
+>
+> The reasoning §1 gives still holds — the rule was against *permanent chrome
+> eating the window*, not against showing the reader what is in their document.
+> What shipped is held to that: the previews take a fifth of the row and fold
+> away with `Ctrl+B`; they step aside entirely for presentation and for a
+> comparison; the status bar answers two questions a reader actually asks of a
+> file (where is it, and may I write to it) in two lines and no more.
+>
+> Struck through rather than removed, because a rule that was once thought
+> necessary is worth being able to see.
+
 **Never, at any version:**
 
 - Form filling
@@ -199,8 +215,8 @@ ruling. This section supersedes `MX.md` §4.
 - Bookmarks
 - Tabs, or a multi-document workspace
 - Remember last page per file
-- Any *persistent* sidebar, side panel, dock or status bar
-- A page thumbnails *panel*
+- ~~Any *persistent* sidebar, side panel, dock or status bar~~ — **struck at Z12**
+- ~~A page thumbnails *panel*~~ — **struck at Z12**
 - Network access of any kind — no update check, no telemetry, no analytics, no
   crash reporting
 - Opening a URL — addresses are selectable text, never clickable
@@ -848,6 +864,79 @@ The full disposition of all 51 — fixed with a commit, ruled, rejected
 with the evidence, or partial with the reason — is in `docs/audit/DISPOSITION.md`.
 That directory is scratch and is not tracked; this paragraph is the tracked
 record that it existed.
+
+### Z12 — What the reader asked for, after looking at it — `v2.0.0`
+
+Also not planned. The author ran the built application, looked at it properly,
+and reported what was wrong with it. Everything here comes from that.
+
+**The rendering.** Pages looked as though nothing had ever heard of
+antialiasing. poppler's antialiasing was on the whole time; `PageView` had no
+device-pixel-ratio handling at all, so on a 2x display every page was rasterised
+at half the pixels it occupied and then scaled up by the compositor. Rendered at
+real density now, with `setDevicePixelRatio` so every other coordinate stays
+logical and nothing else had to change. The peek preview and the new previews
+strip get the same treatment.
+
+**The title said MERGEN twice.** Not this application's string: `main.cpp` set
+an application *display name*, and Qt appends " — <display name>" to every
+window title at the platform layer.
+
+**A click could not clear a selection.** `positionAt` snaps to the nearest word,
+so pressing empty space selected that word. Now measured by drag distance
+against `startDragDistance()`, which keeps deliberately dragging across a single
+word working — comparing the two ends would not have.
+
+**The paper floats.** Page gap 12px to 22px, a margin at each side so all four
+edges of a page are always visible, and each page carries a hairline edge and a
+three-step shadow. Both colours come from palette roles, so they follow the
+reader's theme and night mode with no second set of colour rules.
+
+**A strip of page previews**, about a fifth of the row, `Ctrl+B`. Built the way
+`PageView` is built rather than as a list of icons: a thousand-page document
+renders a dozen thumbnails, not a thousand. It steps aside for presentation and
+for a comparison.
+
+**Zoom shows its value**, with a logarithmic slider whose middle is life size
+rather than five times it. The readout shows the true zoom even where a fit mode
+legitimately goes below the slider's floor.
+
+**A status bar** — full path, creation and modification dates centred, octal and
+symbolic permissions. `statx` rather than `stat`, because `stat` has no creation
+time to give: `st_ctime` is the inode's *change* time and is routinely mistaken
+for this one. Where the filesystem records no birth time it says so rather than
+showing a different fact under this label.
+
+**Two pointer modes**, `Ctrl+H`: select text, or grab the page and move it in
+any direction. A middle-drag pans in either mode.
+
+**An About page in the family layout** — the mark, the wordmark, a bilingual
+subtitle, version, release date, maker, source, the licence in full, and the
+sign-off. Addresses selectable, never clickable. The application icon existed
+but was only findable after installation and `setWindowIcon` was never called at
+all, so it is embedded as a Qt resource now and the installed icon theme is
+preferred when there is one.
+
+> [!NOTE]
+> **Amended at Z12.** Three defects here were found by the author looking at the
+> application, not by any test, and two of them had been shipping unnoticed
+> since the milestone that introduced them.
+>
+> `GlyphButton::paintEvent` washed the button for `State_Sunken` and
+> `State_MouseOver` and never looked at `State_On`, so a *checked* toggle
+> painted exactly like an unchecked one. The previews toggle had therefore been
+> invisible from the moment it was added.
+>
+> The status bar's permissions were set bold and rendered plain: this system
+> resolves `monospace` to Andale Mono, which ships no bold face, and Qt did not
+> synthesise one — weight 700 produced glyphs identical to weight 400, to the
+> same advance width. The family is now chosen by whether it can do what is
+> asked of it.
+>
+> The dates were centred with `addPermanentWidget`, which is laid out after the
+> stretch is shared, so the space either side was never equal and they sat 74px
+> left of centre. The test that was supposed to catch this used a tolerance of
+> one twelfth of the window, and passed.
 
 ## 11. Release procedure
 
