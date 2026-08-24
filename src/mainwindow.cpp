@@ -35,7 +35,10 @@
 #include <QPrinter>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QDragEnterEvent>
+#include <QDropEvent>
 #include <QGridLayout>
+#include <QMimeData>
 #include <QListWidget>
 #include <functional>
 #include <QStyleOptionToolButton>
@@ -222,6 +225,8 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
         }
     });
 
+    setAcceptDrops(true);
+
     loadRecent();
     buildToolBar();
     updateTitle();
@@ -347,7 +352,13 @@ void MainWindow::buildToolBar() {
             m_overlay->dismiss();
             return;
         }
-        closeSearch();
+        if (m_searchBar && m_searchBar->isVisible()) {
+            closeSearch();
+            return;
+        }
+        if (m_view->isPresenting()) {
+            setPresenting(false);
+        }
     });
     addAction(closeSearchAction);
 
@@ -356,6 +367,12 @@ void MainWindow::buildToolBar() {
     // Return would swallow Enter in the page counter and the search field.
     // They are handled where focus actually is — in the page view's key
     // handler and in the search field's event filter.
+
+    auto *presentAction = new QAction(this);
+    presentAction->setShortcut(QKeySequence(QStringLiteral("F5")));
+    connect(presentAction, &QAction::triggered, this,
+            [this] { setPresenting(!m_view->isPresenting()); });
+    addAction(presentAction);
 
     auto *nightAction = new QAction(this);
     nightAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+N")));
@@ -675,6 +692,51 @@ void MainWindow::watchDocument(const QString &path) {
 }
 
 // --- Printing --------------------------------------------------------------
+
+void MainWindow::setPresenting(bool on) {
+    if (m_view->isPresenting() == on) {
+        return;
+    }
+    if (on && !m_doc->isOpen()) {
+        return;
+    }
+
+    if (on) {
+        // Anything drawn over the page belongs to reading, not to presenting.
+        if (m_overlay) {
+            m_overlay->dismiss();
+        }
+        closeSearch();
+    }
+
+    m_view->setPresenting(on);
+    m_toolBar->setVisible(!on);
+    if (on) {
+        showFullScreen();
+    } else {
+        showNormal();
+    }
+    m_view->setFocus(Qt::OtherFocusReason);
+}
+
+void MainWindow::dragEnterEvent(QDragEnterEvent *event) {
+    // One PDF, since MERGEN holds one document. A folder or a second file is
+    // not a smaller version of the request, so it is not accepted at all.
+    const QList<QUrl> urls = event->mimeData()->urls();
+    if (urls.size() == 1 && urls.first().isLocalFile() &&
+        urls.first().toLocalFile().endsWith(QLatin1String(".pdf"), Qt::CaseInsensitive)) {
+        event->acceptProposedAction();
+    }
+}
+
+void MainWindow::dropEvent(QDropEvent *event) {
+    const QList<QUrl> urls = event->mimeData()->urls();
+    if (urls.size() != 1 || !urls.first().isLocalFile()) {
+        return;
+    }
+    event->acceptProposedAction();
+    openPath(urls.first().toLocalFile());
+}
 
 void MainWindow::showCommands() {
     // Unlike the other overlays this one opens with no document: Open is an

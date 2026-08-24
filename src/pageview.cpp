@@ -11,6 +11,11 @@
 #include <QMouseEvent>
 #include <QPainter>
 
+#include <QApplication>
+#include <QPainterPath>
+#include <QPropertyAnimation>
+#include <QScrollBar>
+
 #include <algorithm>
 #include <QPaintEvent>
 #include <QResizeEvent>
@@ -51,6 +56,28 @@ QImage invertLightness(const QImage &in) {
     }
     return out;
 }
+
+/// Whether transitions are drawn at all.
+///
+/// MZ.md asked for animation to be skipped when the platform reports that the
+/// reader wants reduced motion. Qt exposes no such signal on this one. The
+/// nearest thing, QApplication::isEffectEnabled(Qt::UI_General), reads false
+/// under the wayland, minimal, offscreen and vnc plugins alike whenever no
+/// desktop environment has supplied UiEffects — which is precisely a bare Niri
+/// session, MERGEN's own target. Gating on it would have meant shipping motion
+/// that never once ran for the reader it was built for, and "the platform
+/// declined" cannot be told apart from "nobody was asked".
+///
+/// So motion is on. The one place it is decided is here, so a ruling on an
+/// opt-out has somewhere to land — see MZ.md §13.
+bool motionWanted() {
+    return true;
+}
+
+/// Long enough to be followed by the eye, short enough not to be waited on.
+/// Fluent, Material and Apple all land in this range for a transition whose job
+/// is to keep the reader's place rather than to decorate.
+constexpr int kScrollEaseMs = 200;
 
 /// How long the pointer must be held on a link before its target is peeked.
 /// Long enough that a click through a link is never mistaken for a peek, short
@@ -133,13 +160,39 @@ int PageView::currentPage() const {
     return m_layout.isEmpty() ? -1 : captureAnchor().page;
 }
 
+void PageView::animateScrollTo(QScrollBar *bar, int value) {
+    const int target = qBound(bar->minimum(), value, bar->maximum());
+    QPointer<QPropertyAnimation> &slot = bar == verticalScrollBar() ? m_scrollAnimV : m_scrollAnimH;
+
+    if (!motionWanted()) {
+        if (slot) {
+            slot->stop();
+        }
+        bar->setValue(target);
+        return;
+    }
+
+    if (slot) {
+        slot->stop();
+    } else {
+        slot = new QPropertyAnimation(bar, "value", this);
+        slot->setEasingCurve(QEasingCurve::OutCubic);
+        slot->setDuration(kScrollEaseMs);
+    }
+    // From where the bar actually is, never from where the last animation was
+    // headed: that is what keeps a second jump mid-flight from snapping.
+    slot->setStartValue(bar->value());
+    slot->setEndValue(target);
+    slot->start();
+}
+
 void PageView::scrollToPage(int index) {
     if (index < 0 || index >= m_layout.size()) {
         return;
     }
     // Land on the page top rather than centring it: the reader wants to start
     // reading at the top of the page they asked for.
-    verticalScrollBar()->setValue(m_layout.at(index).top() - kPageGap);
+    animateScrollTo(verticalScrollBar(), m_layout.at(index).top() - kPageGap);
     emitPageIfChanged();
 }
 
@@ -252,6 +305,11 @@ const QImage &PageView::cachedPage(int index) {
 }
 
 QColor PageView::surroundColour() const {
+    // Presentation fills the surround with black regardless of palette or mode:
+    // anything else is light thrown at whoever is watching.
+    if (m_presenting) {
+        return Qt::black;
+    }
     const QColor base = palette().color(QPalette::Base);
     if (!m_night) {
         return base;
@@ -264,6 +322,26 @@ QColor PageView::surroundColour() const {
                              std::min({base.red(), base.green(), base.blue()}));
     return QColor(std::clamp(base.red() + shift, 0, 255), std::clamp(base.green() + shift, 0, 255),
                   std::clamp(base.blue() + shift, 0, 255));
+}
+
+void PageView::stopScrollAnimations() {
+    if (m_scrollAnimV) {
+        m_scrollAnimV->stop();
+    }
+    if (m_scrollAnimH) {
+        m_scrollAnimH->stop();
+    }
+}
+
+void PageView::setPresenting(bool on) {
+    if (m_presenting == on) {
+        return;
+    }
+    m_presenting = on;
+    if (on) {
+        setFitPage();
+    }
+    viewport()->update();
 }
 
 void PageView::setNightMode(bool on) {
@@ -624,9 +702,9 @@ void PageView::goToSearchHit(int index) {
         const QRect target = fromPageSpace(page, Document::rotateRect(rect, size, m_rotation));
         // Put the hit a third of the way down rather than at the very top, so
         // there is context above it.
-        verticalScrollBar()->setValue(target.center().y() - viewport()->height() / 3);
+        animateScrollTo(verticalScrollBar(), target.center().y() - viewport()->height() / 3);
         if (m_content.width() > viewport()->width()) {
-            horizontalScrollBar()->setValue(target.center().x() - viewport()->width() / 2);
+            animateScrollTo(horizontalScrollBar(), target.center().x() - viewport()->width() / 2);
         }
     }
     Q_EMIT searchHitsChanged(m_hits.size(), m_currentHit);
@@ -709,13 +787,59 @@ void PageView::mouseReleaseEvent(QMouseEvent *event) {
     QAbstractScrollArea::mouseReleaseEvent(event);
 }
 
-void PageView::paintEmptyState(QPainter &painter) {
-    if (m_message.isEmpty()) {
+void PageView::paintWatermark(QPainter &painter, const QRect &box) {
+    // A sheet with its corner turned, the same gesture the application icon
+    // makes. Proportions, not pixels, so it scales with the window.
+    const int side = qMin(box.width(), box.height()) / 3;
+    if (side < 48) {
         return;
     }
-    painter.setPen(palette().color(QPalette::PlaceholderText));
+    const QRectF sheet(box.center().x() - side * 0.35, box.center().y() - side * 0.62, side * 0.70,
+                       side * 0.92);
+    const double curl = side * 0.26;
+
+    QPainterPath page;
+    page.moveTo(sheet.topLeft());
+    page.lineTo(sheet.right() - curl, sheet.top());
+    page.lineTo(sheet.right(), sheet.top() + curl);
+    page.lineTo(sheet.bottomRight());
+    page.lineTo(sheet.bottomLeft());
+    page.closeSubpath();
+
+    QPainterPath fold;
+    fold.moveTo(sheet.right() - curl, sheet.top());
+    fold.lineTo(sheet.right() - curl, sheet.top() + curl);
+    fold.lineTo(sheet.right(), sheet.top() + curl);
+
+    QColor ink = palette().color(QPalette::PlaceholderText);
+    ink.setAlpha(58);
+    QPen pen(ink);
+    pen.setWidthF(qMax(1.5, side * 0.018));
+    pen.setJoinStyle(Qt::MiterJoin);
+
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setPen(pen);
+    painter.setBrush(Qt::NoBrush);
+    painter.drawPath(page);
+    painter.drawPath(fold);
+    painter.restore();
+}
+
+void PageView::paintEmptyState(QPainter &painter) {
+    // With no document and nothing to report, the view still says what it is
+    // for. One line, always the same, dismissable by using the application —
+    // which is what keeps it an empty state rather than onboarding.
+    const QString caption =
+        m_message.isEmpty() ? tr("Drop a PDF here, or press Ctrl+O") : m_message;
     const QRect box = viewport()->rect().adjusted(32, 32, -32, -32);
-    painter.drawText(box, Qt::AlignCenter | Qt::TextWordWrap, m_message);
+    paintWatermark(painter, box);
+    painter.setPen(palette().color(QPalette::PlaceholderText));
+    // Text sits below the mark rather than over it, so neither is read through
+    // the other.
+    const int side = qMin(box.width(), box.height()) / 3;
+    const QRect line = side < 48 ? box : box.adjusted(0, box.height() / 2 + int(side * 0.42), 0, 0);
+    painter.drawText(line, Qt::AlignHCenter | Qt::AlignTop | Qt::TextWordWrap, caption);
 }
 
 void PageView::resizeEvent(QResizeEvent *event) {
@@ -757,10 +881,19 @@ void PageView::keyPressEvent(QKeyEvent *event) {
         vbar->setValue(vbar->value() - vbar->singleStep());
         return;
     case Qt::Key_PageDown:
-        vbar->setValue(vbar->value() + vbar->pageStep());
+        // Presenting moves a page at a time; reading moves a viewport at a time.
+        if (m_presenting) {
+            scrollToPage(currentPage() + 1);
+        } else {
+            vbar->setValue(vbar->value() + vbar->pageStep());
+        }
         return;
     case Qt::Key_PageUp:
-        vbar->setValue(vbar->value() - vbar->pageStep());
+        if (m_presenting) {
+            scrollToPage(currentPage() - 1);
+        } else {
+            vbar->setValue(vbar->value() - vbar->pageStep());
+        }
         return;
     case Qt::Key_Home:
         vbar->setValue(vbar->minimum());
@@ -899,6 +1032,8 @@ void PageView::restoreAnchor(const Anchor &anchor) {
 }
 
 void PageView::applyScale(double factor, Poppler::Page::Rotation rotation) {
+    // Any jump still running is aimed at a layout that is about to change.
+    stopScrollAnimations();
     const double clamped = qBound(kMinZoom, factor, kMaxZoom);
     if (qFuzzyCompare(clamped, m_zoom) && rotation == m_rotation) {
         return;

@@ -5,6 +5,7 @@
 #pragma once
 
 #include <QAbstractScrollArea>
+#include <QPointer>
 #include <QTimer>
 #include <QHash>
 #include <QImage>
@@ -19,6 +20,9 @@
 #include "document.h"
 
 #include <poppler-qt6.h>
+
+class QScrollBar;
+class QPropertyAnimation;
 
 namespace mergen {
 
@@ -66,6 +70,11 @@ public:
     /// scoped: nothing about it is written to disk.
     bool isNightMode() const { return m_night; }
     void setNightMode(bool on);
+
+    /// Presentation mode: black surround, and PgUp/PgDn move exactly one page
+    /// rather than one viewport. The window chrome is the window's business.
+    bool isPresenting() const { return m_presenting; }
+    void setPresenting(bool on);
 
     /// The page under the viewport centre, zero-based. -1 with no document.
     int currentPage() const;
@@ -129,6 +138,10 @@ protected:
 private:
     void relayout();
     void paintEmptyState(QPainter &painter);
+    /// The application icon's curled-page motif, drawn faintly behind the empty
+    /// state. The icon is real illustration work that otherwise stops at the
+    /// desktop entry — MZ.md \ref 6.
+    void paintWatermark(QPainter &painter, const QRect &box);
     const QImage &cachedPage(int index);
     /// Inclusive page range intersecting the viewport, ignoring the render
     /// margin. Returns {-1, -1} when nothing is laid out.
@@ -155,6 +168,15 @@ private:
 
     const QVector<Word> &wordsOf(int page);
     const QVector<PageLink> &linksOf(int page);
+
+    /// Moves a scrollbar to \a value, eased, or immediately when the platform
+    /// says UI effects are off. Restarting mid-flight picks up from where the
+    /// bar actually is, never from where the last animation was headed, which
+    /// is what stops a second jump from snapping — MZ.md \ref 9.
+    void animateScrollTo(QScrollBar *bar, int value);
+    /// Stops any jump in flight. A relayout aims it at coordinates that have
+    /// moved, so it is cut rather than allowed to land somewhere wrong.
+    void stopScrollAnimations();
     /// The word nearest a viewport point, for anchoring and extending a drag.
     Position positionAt(const QPoint &viewportPoint);
     /// Page-space point, in points, for a viewport point on the given page.
@@ -203,6 +225,7 @@ private:
     int m_reportedPage = -1;
 
     bool m_night = false;
+    bool m_presenting = false;
     double m_zoom = 1.0;
     ZoomMode m_zoomMode = ZoomMode::FitWidth;
     Poppler::Page::Rotation m_rotation = Poppler::Page::Rotate0;
@@ -227,6 +250,9 @@ private:
     /// Hold-to-peek. A press on a link starts the timer instead of a
     /// selection; the peek is only asked for once the reader has held it long
     /// enough to have meant it, and is ended by the release.
+    QPointer<QPropertyAnimation> m_scrollAnimV;
+    QPointer<QPropertyAnimation> m_scrollAnimH;
+
     QTimer *m_peekTimer = nullptr;
     int m_peekPage = -1;
     QPoint m_peekOrigin;

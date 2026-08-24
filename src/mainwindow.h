@@ -63,6 +63,8 @@ private:
     void updateActionStates();
 
     void changeEvent(QEvent *event) override;
+    void dragEnterEvent(QDragEnterEvent *event) override;
+    void dropEvent(QDropEvent *event) override;
 
     void updateTitle();
     void closeDocument(const QString &message = QString());
@@ -71,6 +73,8 @@ private:
     // Actions.
     void showProperties();
     void showOutline();
+    /// Fullscreen, chrome withdrawn, one page at a time. Esc leaves.
+    void setPresenting(bool on);
     /// One surface for a page number, a search term, or any action by name.
     /// What the reader typed decides which — MZ.md \ref 6.
     void showCommands();

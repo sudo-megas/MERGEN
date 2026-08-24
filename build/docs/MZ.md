@@ -325,9 +325,17 @@ MERGEN ///— document.pdf —\\\ MEGAS
 **Empty state.** Launched with no argument, MERGEN shows the page view with the
 toolbar active and the whole window as a drop target. Behind the centred text
 sits a faint watermark drawn from the application icon's own curled-corner
-motif — the icon is real illustration work and it currently stops at the
-desktop entry. Error messages for unreadable or non-PDF files are drawn as
-centred text in this same view, never as a dialog box.
+motif — the icon is real illustration work and it otherwise stops at the
+desktop entry. The text is one line naming the two ways in, shown whenever
+there is no document and nothing else to say. It is not onboarding: it never
+appears over a document, is dismissed by using the application rather than by
+being acknowledged, and says the same thing on the thousandth launch as on the
+first. Error messages for unreadable or non-PDF files replace that line in this
+same view, never as a dialog box.
+
+Only one PDF may be dropped. MERGEN holds one document, and a folder or a
+second file is not a smaller version of that request, so it is refused at the
+door rather than half-honoured.
 
 **Motion.** Zoom changes, page jumps and search navigation are tweened over
 roughly 150–250 ms with an ease-out curve rather than snapping, and scrolling
@@ -505,12 +513,44 @@ text before the reader is told it succeeded — a redaction tool that cannot
 demonstrate the text is gone is the kind that ships the lie this project is
 adding a dependency specifically to avoid.
 
-**Motion.** `QVariantAnimation` for zoom, `QPropertyAnimation` on the
-scrollbar's `value` for jumps, `QScroller` on the viewport for momentum. Every
-animation is checked against the platform's reduced-motion hint and skipped
-when set. Animations are interruptible and always animate from the current
-on-screen value rather than from where the previous one intended to land, which
-is what prevents a visible jump when a reader zooms twice quickly.
+**Motion.** `QPropertyAnimation` on the scrollbar's `value`, eased out over
+200 ms, for page jumps and search navigation. Animations are interruptible and
+always start from the value the bar actually holds rather than from where the
+previous one intended to land, which is what stops a second jump mid-flight
+from snapping. A relayout cancels any jump in flight, because it was aimed at
+coordinates that have moved.
+
+> [!NOTE]
+> **Amended at Z7 — zoom is not animated.** This section first called for
+> tweened zoom. Zoom changes the rendered size, so animating it means
+> re-rendering every frame. Measured on this machine against a trivial page:
+> 2.0 ms at 100%, 9.7 ms at 250%, 23.4 ms at 400% — already past the 16.7 ms a
+> 60 Hz frame allows, on a page with nothing on it but five rectangles. A real
+> document would be far worse, so tweened zoom would have made the application
+> feel worse rather than better, which is the opposite of the point. Doing it
+> properly means scaling the cached pixmap during the gesture and re-rendering
+> sharp at the end; that is a genuine feature and it is not this milestone.
+> §9 already says to move work off the main thread only after measuring — the
+> same rule applied here, and the measurement said no.
+
+> [!NOTE]
+> **Amended at Z7 — there is no reduced-motion hint to honour.** This section
+> first said every animation is checked against the platform's reduced-motion
+> hint. Qt exposes none on this platform. The nearest thing,
+> `QApplication::isEffectEnabled(Qt::UI_General)`, reads **false** under the
+> wayland, minimal, offscreen and vnc plugins alike whenever no desktop
+> environment has supplied `UiEffects` — which is exactly a bare Niri session,
+> MERGEN's own target. Gating on it would have shipped motion that never once
+> ran for the reader it was built for, and "the platform declined" cannot be
+> told apart from "nobody was asked". Motion is therefore unconditional, and
+> the decision lives in one function so a ruling has somewhere to land — see
+> §13.
+
+`QScroller` is not used. Qt's own wheel handling already delivers the
+high-resolution pixel deltas a trackpad sends through libinput, which is where
+smooth scrolling on this platform actually comes from; `QScroller` would add a
+touch-gesture grab that competes with text selection for the left button and
+buys nothing a Wayland trackpad does not already provide.
 
 **Threading.** Rendering remains synchronous on the main thread, as in v1.0.
 Night mode adds a per-page pass and compare adds a per-page comparison; if
@@ -809,6 +849,12 @@ candidates, with what each costs:
 - *Sidecar, with an explicit export.* Both, and the most work.
 
 Nothing is built toward any of them before the ruling.
+
+**An opt-out for motion.** Motion is unconditional because Qt offers nothing on
+this platform to condition it on — see the amendment in §9. A reader who wants
+none has no way to say so. The options are an environment variable read at
+startup, a keybinding, or waiting for Qt to grow a real hint. All three are
+rulings, not choices to make mid-programme, so none was taken.
 
 **Hiding annotations.** MERGEN draws the markup a document carries and offers
 no way to turn it off. A reader who wants the clean page underneath someone
