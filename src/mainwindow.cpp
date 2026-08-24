@@ -1289,10 +1289,25 @@ void MainWindow::showCommands() {
         if (text.isEmpty() || QStringLiteral("portals").contains(text, Qt::CaseInsensitive)) {
             add(tr("Portals"), [this] { showPortals(); });
         }
-        if (!m_view->selectedText().trimmed().isEmpty() &&
-            (text.isEmpty() || QStringLiteral("redact").contains(text, Qt::CaseInsensitive))) {
-            add(tr("Redact selection"), [this] { redactSelection(); });
-        }
+        // Redaction is deliberately not offered — MZ.md §13.
+        //
+        // The freeze audit found four independent routes by which it reported
+        // success while the selected text stayed extractable, confirmed by two
+        // reviewers working separately on two different PDF engines. It tests
+        // only a show operator's origin rather than its painted extent; it
+        // never advances the text matrix, so it deletes far more than the bar
+        // covers; it drops the line advance carried by ' and ", which slides
+        // the following line underneath the bar still readable; and it computes
+        // its rectangle in poppler's display space while spending it as PDF
+        // user space, so on any cropped page it destroys the wrong region and
+        // leaves the secret. On real documents it mostly declines outright.
+        //
+        // A tool that says a secret is gone when it is not is worse than no
+        // tool. That is the reason §3 gives for taking on qpdf at all, and it
+        // is the reason the door is shut until the filter models text layout
+        // properly rather than approximating it. redact.cpp stays, and its own
+        // guards were repaired in Z11a, so reopening this is a matter of
+        // finishing the work rather than starting it.
 
         int rows = 0;
         for (int i = 0; i < list->count(); ++i) {

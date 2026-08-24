@@ -181,7 +181,7 @@ Everything in v1.0 §3 remains, unchanged, and is not restated. Added:
 | Control socket | `open`, `goto`, `search`, `next`, `prev`, `quit` over a Unix socket in `$XDG_RUNTIME_DIR` |
 | Compare | Two revisions of a document side by side, differing regions marked |
 | Portals | A reader-made two-way link between locations, within a document or across two |
-| Redaction | Selected text removed from the content stream, written to a new file. Never in place |
+| ~~Redaction~~ | **Withdrawn at Z11.** Built, audited, and found to fail open by four routes. The code remains; the feature is not offered — see §13 |
 | Motion | Zoom, page jump and search navigation are tweened; scrolling carries momentum |
 
 ---
@@ -883,6 +883,29 @@ this platform to condition it on — see the amendment in §9. A reader who want
 none has no way to say so. The options are an environment variable read at
 startup, a keybinding, or waiting for Qt to grow a real hint. All three are
 rulings, not choices to make mid-programme, so none was taken.
+
+**Redaction, and whether it returns.** Withdrawn at Z11 rather than shipped.
+The audit found four independent routes by which it reported success while the
+selected text remained extractable, confirmed by two reviewers working
+separately on two different PDF engines, and a fifth by which a symlinked
+destination destroyed the source. The last is fixed; the first four are not,
+because they are one defect: the filter approximates text layout instead of
+modelling it. It tests a show operator's origin rather than its painted extent,
+never advances the text matrix across glyphs, and drops the line advance carried
+by `'` and `"` — which slides the following line under the black bar, still
+readable, manufacturing exactly the false guarantee §3 cites as the reason for
+taking on `qpdf`.
+
+Returning it means tracking the full text state (`Tf`, `Tc`, `Tw`, `Tz`, `Ts`,
+`TL`), advancing per glyph by font width, testing the painted extent, and
+decomposing `'`/`"` into their advance and their show so only the show is
+suppressed — plus converting display space to user space with the CropBox
+origin. That is a milestone, not a patch, and it should be verified against
+documents from real producers rather than hand-built ones: on the valgrind
+manual, the speex manual and this project's own `test.pdf`, the current
+implementation simply declines.
+
+Until then the honest position is that MERGEN does not redact.
 
 **Hiding annotations.** MERGEN draws the markup a document carries and offers
 no way to turn it off. A reader who wants the clean page underneath someone
