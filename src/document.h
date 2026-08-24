@@ -108,6 +108,12 @@ public:
 
     int pageCount() const;
 
+    /// A hash of the document's bytes, computed once and kept. Portals are
+    /// keyed by it rather than by path, so one survives its document being
+    /// moved and never silently attaches to a different file that happens to
+    /// take the old name — MZ.md \ref 8.
+    QString contentHash() const;
+
     /// Metadata, permissions and the security warnings described on
     /// \ref DocumentProperties. Gathered on demand, never at open time: it
     /// walks the font table, which is work no reader asked for until they ask.
@@ -146,6 +152,7 @@ private:
     std::unique_ptr<Poppler::Document> m_doc;
     QString m_path;
     QByteArray m_data;
+    mutable QString m_hash;
 };
 
 /// Runs a search pass over its own document handle, because poppler's document
@@ -175,6 +182,7 @@ Q_SIGNALS:
 private:
     QString m_path;
     QByteArray m_data;
+    mutable QString m_hash;
     QString m_needle;
     QAtomicInt m_cancelled{0};
 };

@@ -360,6 +360,9 @@ Standard desktop conventions. No vim-style bindings anywhere. Everything in
 | <kbd>Ctrl</kbd>+<kbd>I</kbd> | Document properties |
 | <kbd>Ctrl</kbd>+<kbd>N</kbd> | Night mode on / off |
 | <kbd>F5</kbd> | Presentation mode |
+| <kbd>Ctrl</kbd>+<kbd>D</kbd> | Compare with another document / leave compare |
+| <kbd>Ctrl</kbd>+<kbd>M</kbd> | Mark one end of a portal, or complete it |
+| <kbd>Ctrl</kbd>+<kbd>J</kbd> | Follow the portal on this page |
 | <kbd>Esc</kbd> | Close the frontmost overlay, or leave presentation mode |
 
 `Esc` already closed the search bar in v1.0 and now closes whatever transient

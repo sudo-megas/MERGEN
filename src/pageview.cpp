@@ -344,6 +344,36 @@ void PageView::setPresenting(bool on) {
     viewport()->update();
 }
 
+void PageView::setDiffBands(int page, const QVector<QPair<double, double>> &bands) {
+    if (bands.isEmpty()) {
+        m_diffBands.remove(page);
+    } else {
+        m_diffBands.insert(page, bands);
+    }
+    viewport()->update();
+}
+
+void PageView::clearDiffBands() {
+    m_diffBands.clear();
+    viewport()->update();
+}
+
+void PageView::paintDiffBands(QPainter &painter, int page, const QPoint &origin) {
+    const auto found = m_diffBands.constFind(page);
+    if (found == m_diffBands.constEnd()) {
+        return;
+    }
+    const QRect box = m_layout.at(page).translated(origin);
+    // The same derived contrast colour the search already uses: one derived
+    // value in the palette, not two — MZ.md §6.
+    for (const auto &band : found.value()) {
+        const int top = box.top() + qRound(band.first * box.height());
+        const int bottom = box.top() + qRound(band.second * box.height());
+        painter.fillRect(QRect(box.left(), top, box.width(), qMax(2, bottom - top)),
+                         searchColor(64));
+    }
+}
+
 void PageView::setNightMode(bool on) {
     if (m_night == on) {
         return;
@@ -396,6 +426,7 @@ void PageView::paintEvent(QPaintEvent *event) {
         painter.drawImage(target.topLeft(), image);
         paintSelection(painter, i, origin);
         paintSearchHits(painter, i, origin);
+        paintDiffBands(painter, i, origin);
     }
 
     paintNotice(painter);

@@ -101,6 +101,12 @@ public:
     /// alongside the words, and dropped on rotation for the same reason.
     const PageLink *linkAt(const QPoint &viewportPoint);
 
+    /// Bands of a page, as fractions of its height, where a comparison found a
+    /// difference. Fractions rather than pixels so the marks survive a zoom.
+    void setDiffBands(int page, const QVector<QPair<double, double>> &bands);
+    void clearDiffBands();
+    bool hasDiffBands() const { return !m_diffBands.isEmpty(); }
+
     void addSearchHit(int page, const QRectF &rect);
     void clearSearchHits();
     int searchHitCount() const { return m_hits.size(); }
@@ -185,6 +191,7 @@ private:
     QRect fromPageSpace(int page, const QRectF &pageRect) const;
     void paintSelection(QPainter &painter, int page, const QPoint &origin);
     void paintSearchHits(QPainter &painter, int page, const QPoint &origin);
+    void paintDiffBands(QPainter &painter, int page, const QPoint &origin);
     /// Derived from QPalette::Highlight at runtime: hue turned through 180
     /// degrees so a hit always contrasts with both the selection and the page.
     QColor searchColor(int alpha) const;
@@ -261,6 +268,8 @@ private:
     Position m_selectionAnchor;
     Position m_selectionCursor;
     bool m_dragging = false;
+
+    QHash<int, QVector<QPair<double, double>>> m_diffBands;
 
     /// (page, rect) with the rect in the unrotated page space.
     QList<QPair<int, QRectF>> m_hits;

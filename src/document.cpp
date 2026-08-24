@@ -4,6 +4,7 @@
 
 #include "document.h"
 
+#include <QCryptographicHash>
 #include <QDateTime>
 #include <poppler-annotation.h>
 #include <poppler-link.h>
@@ -35,6 +36,7 @@ LoadStatus Document::openPath(const QString &path, const QByteArray &password) {
     if (status == LoadStatus::Ok || status == LoadStatus::NeedsPassword) {
         m_path = info.absoluteFilePath();
         m_data.clear();
+        m_hash.clear();
     }
     return status;
 }
@@ -107,6 +109,7 @@ void Document::close() {
     m_doc.reset();
     m_path.clear();
     m_data.clear();
+    m_hash.clear();
 }
 
 int Document::pageCount() const {
@@ -187,6 +190,28 @@ QVector<PageLink> Document::pageLinks(int index, Poppler::Page::Rotation rotatio
         out.append({rotateRect(points, size, rotation), target});
     }
     return out;
+}
+
+QString Document::contentHash() const {
+    if (!m_hash.isEmpty() || !m_doc) {
+        return m_hash;
+    }
+    // Bytes already in hand for a document that came through the elevation
+    // helper; otherwise read the file once.
+    if (!m_data.isEmpty()) {
+        m_hash = QString::fromLatin1(
+            QCryptographicHash::hash(m_data, QCryptographicHash::Sha256).toHex());
+        return m_hash;
+    }
+    QFile file(m_path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        return QString();
+    }
+    QCryptographicHash hash(QCryptographicHash::Sha256);
+    if (hash.addData(&file)) {
+        m_hash = QString::fromLatin1(hash.result().toHex());
+    }
+    return m_hash;
 }
 
 DocumentProperties Document::properties() const {

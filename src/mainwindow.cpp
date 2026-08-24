@@ -27,6 +27,7 @@
 #include <QEvent>
 #include <QEventLoop>
 #include <QHBoxLayout>
+#include <QScrollBar>
 #include <QKeyEvent>
 #include <QDialog>
 #include <QDialogButtonBox>
@@ -48,6 +49,7 @@
 #include <QVBoxLayout>
 #include <QProcess>
 #include <QSaveFile>
+#include <QStandardPaths>
 #include <QToolBar>
 #include <QToolButton>
 #include <QWidget>
@@ -204,11 +206,18 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     column->setContentsMargins(0, 0, 0, 0);
     column->setSpacing(0);
 
-    m_view = new PageView(central);
+    m_viewRow = new QWidget(central);
+    auto *row = new QHBoxLayout(m_viewRow);
+    row->setContentsMargins(0, 0, 0, 0);
+    row->setSpacing(1);
+
+    m_view = new PageView(m_viewRow);
     m_overlay = new Overlay(m_view);
+    row->addWidget(m_view, 1);
+
     buildSearchBar();
     column->addWidget(m_searchBar);
-    column->addWidget(m_view, 1);
+    column->addWidget(m_viewRow, 1);
     setCentralWidget(central);
 
     m_watcher = new QFileSystemWatcher(this);
@@ -229,6 +238,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     setAcceptDrops(true);
 
     loadRecent();
+    loadPortals();
     buildToolBar();
     updateTitle();
     onPageChanged(-1);
@@ -368,6 +378,27 @@ void MainWindow::buildToolBar() {
     // Return would swallow Enter in the page counter and the search field.
     // They are handled where focus actually is — in the page view's key
     // handler and in the search field's event filter.
+
+    auto *markAction = new QAction(this);
+    markAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+M")));
+    connect(markAction, &QAction::triggered, this, &MainWindow::markPortal);
+    addAction(markAction);
+
+    auto *followAction = new QAction(this);
+    followAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+J")));
+    connect(followAction, &QAction::triggered, this, &MainWindow::followPortal);
+    addAction(followAction);
+
+    auto *compareAction = new QAction(this);
+    compareAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+D")));
+    connect(compareAction, &QAction::triggered, this, [this] {
+        if (isComparing()) {
+            leaveCompare();
+        } else {
+            chooseComparison();
+        }
+    });
+    addAction(compareAction);
 
     auto *presentAction = new QAction(this);
     presentAction->setShortcut(QKeySequence(QStringLiteral("F5")));
@@ -764,6 +795,326 @@ QString MainWindow::runCommand(const QString &verb, const QString &argument) {
     return err(QStringLiteral("unknown command ") + verb);
 }
 
+QString MainWindow::portalFilePath() {
+    return QStandardPaths::writableLocation(QStandardPaths::GenericStateLocation) +
+           QStringLiteral("/mergen/portals.toml");
+}
+
+void MainWindow::loadPortals() {
+    m_portals.clear();
+    QFile file(portalFilePath());
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        return;
+    }
+    Portal current;
+    int ends = 0;
+    while (!file.atEnd()) {
+        const QString line = QString::fromUtf8(file.readLine()).trimmed();
+        if (line == QLatin1String("[[portal]]")) {
+            // A portal needs both ends; a half-written one is dropped rather
+            // than kept as something that goes nowhere.
+            if (ends == 2) {
+                m_portals.append(current);
+            }
+            current = Portal();
+            ends = 0;
+            continue;
+        }
+        const int eq = line.indexOf(QLatin1Char('='));
+        if (eq < 0) {
+            continue;
+        }
+        const QString key = line.left(eq).trimmed();
+        QString value = line.mid(eq + 1).trimmed();
+        if (value.startsWith(QLatin1Char('"')) && value.endsWith(QLatin1Char('"')) &&
+            value.size() >= 2) {
+            value = tomlUnescape(value.mid(1, value.size() - 2));
+        }
+        PortalEnd &end = ends == 0 ? current.a : current.b;
+        if (key == QLatin1String("hash")) {
+            end.hash = value;
+        } else if (key == QLatin1String("path")) {
+            end.path = value;
+        } else if (key == QLatin1String("page")) {
+            end.page = value.toInt();
+            ++ends;
+        }
+    }
+    if (ends == 2) {
+        m_portals.append(current);
+    }
+}
+
+void MainWindow::savePortals() const {
+    const QString path = portalFilePath();
+    QDir().mkpath(QFileInfo(path).absolutePath());
+
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        return;
+    }
+    QByteArray out;
+    for (const Portal &portal : m_portals) {
+        out += "[[portal]]\n";
+        for (const PortalEnd *end : {&portal.a, &portal.b}) {
+            out += QStringLiteral("hash = \"%1\"\n").arg(tomlEscape(end->hash)).toUtf8();
+            out += QStringLiteral("path = \"%1\"\n").arg(tomlEscape(end->path)).toUtf8();
+            out += QStringLiteral("page = %1\n").arg(end->page).toUtf8();
+        }
+    }
+    file.write(out);
+    file.commit();
+}
+
+void MainWindow::markPortal() {
+    if (!m_doc->isOpen()) {
+        return;
+    }
+    const PortalEnd here{m_doc->contentHash(), m_doc->path(), m_view->currentPage()};
+    if (here.hash.isEmpty()) {
+        return;
+    }
+
+    if (!m_pendingEnd) {
+        m_pendingEnd = here;
+        m_view->setNotice(tr("Portal started here. Go to the other end and press Ctrl+M again."));
+        return;
+    }
+    if (m_pendingEnd->hash == here.hash && m_pendingEnd->page == here.page) {
+        // Both ends in the same place is not a link, it is a cancel.
+        m_pendingEnd.reset();
+        m_view->setNotice(QString());
+        return;
+    }
+
+    m_portals.append({*m_pendingEnd, here});
+    m_pendingEnd.reset();
+    savePortals();
+    m_view->setNotice(tr("Portal made. Ctrl+J follows it."));
+}
+
+void MainWindow::followPortal() {
+    if (!m_doc->isOpen()) {
+        return;
+    }
+    const QString hash = m_doc->contentHash();
+    const int page = m_view->currentPage();
+
+    for (const Portal &portal : m_portals) {
+        const PortalEnd *from = nullptr;
+        const PortalEnd *to = nullptr;
+        if (portal.a.hash == hash && portal.a.page == page) {
+            from = &portal.a;
+            to = &portal.b;
+        } else if (portal.b.hash == hash && portal.b.page == page) {
+            from = &portal.b;
+            to = &portal.a;
+        }
+        if (!from) {
+            continue;
+        }
+
+        if (to->hash == hash) {
+            m_view->scrollToPage(to->page);
+            return;
+        }
+        if (!QFileInfo::exists(to->path)) {
+            // Kept, not deleted: the file may simply not be mounted today.
+            m_view->setNotice(tr("The other end of this portal is in %1, which is not there.")
+                                  .arg(QFileInfo(to->path).fileName()));
+            return;
+        }
+        const int target = to->page;
+        openPath(to->path);
+        if (m_doc->isOpen()) {
+            m_view->scrollToPage(target);
+        }
+        return;
+    }
+    m_view->setNotice(tr("No portal on this page."));
+}
+
+void MainWindow::showPortals() {
+    auto *list = new QListWidget;
+    list->setFrameShape(QFrame::NoFrame);
+    list->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    list->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    list->setAutoFillBackground(false);
+    list->viewport()->setAutoFillBackground(false);
+    list->setBackgroundRole(QPalette::NoRole);
+    list->viewport()->setBackgroundRole(QPalette::NoRole);
+
+    if (m_portals.isEmpty()) {
+        auto *empty = new QLabel(tr("No portals yet. Ctrl+M marks one end, then the other."));
+        empty->setWordWrap(true);
+        delete list;
+        m_overlay->present(tr("Portals"), empty);
+        return;
+    }
+
+    for (const Portal &portal : m_portals) {
+        const QString text = tr("%1 p%2  \u2194  %3 p%4")
+                                 .arg(QFileInfo(portal.a.path).fileName())
+                                 .arg(portal.a.page + 1)
+                                 .arg(QFileInfo(portal.b.path).fileName())
+                                 .arg(portal.b.page + 1);
+        auto *item = new QListWidgetItem(text, list);
+        item->setData(Qt::UserRole, portal.a.path);
+        item->setData(Qt::UserRole + 1, portal.a.page);
+    }
+
+    int rows = 0;
+    for (int i = 0; i < list->count(); ++i) {
+        rows += list->sizeHintForRow(i);
+    }
+    list->setFixedHeight(rows + 2);
+    list->setCurrentRow(0);
+
+    const auto go = [this](QListWidgetItem *item) {
+        const QString path = item->data(Qt::UserRole).toString();
+        const int page = item->data(Qt::UserRole + 1).toInt();
+        m_overlay->dismiss();
+        if (QFileInfo::exists(path)) {
+            openPath(path);
+            m_view->scrollToPage(page);
+        }
+    };
+    connect(list, &QListWidget::itemActivated, this, go);
+    connect(list, &QListWidget::itemClicked, this, go);
+
+    m_overlay->present(tr("Portals"), list);
+    list->setFocus(Qt::OtherFocusReason);
+}
+
+void MainWindow::chooseComparison() {
+    if (!m_doc->isOpen()) {
+        return;
+    }
+    const QString path = QFileDialog::getOpenFileName(this, tr("Compare with"),
+                                                      QFileInfo(m_doc->path()).absolutePath(),
+                                                      tr("PDF documents (*.pdf)"));
+    if (!path.isEmpty()) {
+        enterCompare(path);
+    }
+}
+
+void MainWindow::enterCompare(const QString &path) {
+    if (isComparing() || !m_doc->isOpen()) {
+        return;
+    }
+
+    m_compareDoc = std::make_unique<Document>();
+    if (m_compareDoc->openPath(path) != LoadStatus::Ok) {
+        m_compareDoc.reset();
+        m_view->setNotice(
+            tr("%1 could not be opened for comparison.").arg(QFileInfo(path).fileName()));
+        return;
+    }
+
+    m_compareView = new PageView(m_viewRow);
+    m_compareView->setDocument(m_compareDoc.get());
+    m_compareView->setNightMode(m_view->isNightMode());
+    qobject_cast<QHBoxLayout *>(m_viewRow->layout())->addWidget(m_compareView, 1);
+
+    // Scroll-locked both ways. The guard stops the two from driving each other
+    // in a loop, which is what a naive two-way binding does.
+    auto *lock = new bool(false);
+    m_compareView->connect(m_compareView, &QObject::destroyed, [lock] { delete lock; });
+    const auto bind = [lock](PageView *from, PageView *to) {
+        QObject::connect(from->verticalScrollBar(), &QScrollBar::valueChanged, to, [=](int value) {
+            if (*lock) {
+                return;
+            }
+            *lock = true;
+            to->verticalScrollBar()->setValue(value);
+            *lock = false;
+        });
+    };
+    bind(m_view, m_compareView);
+    bind(m_compareView, m_view);
+
+    computeDiff();
+    updateTitle();
+}
+
+void MainWindow::leaveCompare() {
+    if (!isComparing()) {
+        return;
+    }
+    m_view->clearDiffBands();
+    delete m_compareView;
+    m_compareView = nullptr;
+    m_compareDoc.reset();
+    updateTitle();
+}
+
+void MainWindow::computeDiff() {
+    if (!isComparing()) {
+        return;
+    }
+    // Rendered small on purpose. This reports that a region changed, not what
+    // the change means, and says so rather than implying more precision than a
+    // pixel comparison has — MZ.md §9.
+    constexpr double kDiffScale = 0.35;
+    constexpr int kBandRows = 6;
+    constexpr int kChannelSlack = 24;
+
+    const int pages = qMin(m_doc->pageCount(), m_compareDoc->pageCount());
+    for (int page = 0; page < pages; ++page) {
+        const QImage left = m_doc->renderPage(page, kDiffScale, Poppler::Page::Rotate0)
+                                .convertToFormat(QImage::Format_RGB32);
+        const QImage right = m_compareDoc->renderPage(page, kDiffScale, Poppler::Page::Rotate0)
+                                 .convertToFormat(QImage::Format_RGB32);
+        if (left.isNull() || right.isNull()) {
+            continue;
+        }
+
+        QVector<QPair<double, double>> bands;
+        const int height = qMin(left.height(), right.height());
+        const int width = qMin(left.width(), right.width());
+        bool open = false;
+        double start = 0.0;
+
+        for (int y = 0; y < height; y += kBandRows) {
+            bool differs = left.height() != right.height() || left.width() != right.width();
+            for (int row = y; row < qMin(y + kBandRows, height) && !differs; ++row) {
+                const auto *a = reinterpret_cast<const QRgb *>(left.scanLine(row));
+                const auto *b = reinterpret_cast<const QRgb *>(right.scanLine(row));
+                for (int x = 0; x < width; ++x) {
+                    if (qAbs(qRed(a[x]) - qRed(b[x])) > kChannelSlack ||
+                        qAbs(qGreen(a[x]) - qGreen(b[x])) > kChannelSlack ||
+                        qAbs(qBlue(a[x]) - qBlue(b[x])) > kChannelSlack) {
+                        differs = true;
+                        break;
+                    }
+                }
+            }
+            const double top = double(y) / height;
+            if (differs && !open) {
+                open = true;
+                start = top;
+            } else if (!differs && open) {
+                open = false;
+                bands.append({start, top});
+            }
+        }
+        if (open) {
+            bands.append({start, 1.0});
+        }
+
+        m_view->setDiffBands(page, bands);
+        m_compareView->setDiffBands(page, bands);
+    }
+
+    // A document the other does not reach is entirely a difference.
+    for (int page = pages; page < m_doc->pageCount(); ++page) {
+        m_view->setDiffBands(page, {{0.0, 1.0}});
+    }
+    for (int page = pages; page < m_compareDoc->pageCount(); ++page) {
+        m_compareView->setDiffBands(page, {{0.0, 1.0}});
+    }
+}
+
 void MainWindow::setPresenting(bool on) {
     if (m_view->isPresenting() == on) {
         return;
@@ -890,6 +1241,10 @@ void MainWindow::showCommands() {
         }
 
         offerActions(false);
+
+        if (text.isEmpty() || QStringLiteral("portals").contains(text, Qt::CaseInsensitive)) {
+            add(tr("Portals"), [this] { showPortals(); });
+        }
 
         int rows = 0;
         for (int i = 0; i < list->count(); ++i) {

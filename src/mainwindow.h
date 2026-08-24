@@ -13,6 +13,7 @@
 #include <QVector>
 
 #include <memory>
+#include <optional>
 
 class QAction;
 class QLabel;
@@ -50,6 +51,14 @@ public:
     /// which makes this process the second one — MZ.md §9.
     bool listenForCommands();
 
+    // Compare — MZ.md §9. Two documents held side by side for the length of a
+    // comparison. Not a workspace: no tab strip, no switcher, no second
+    // independent view state, and it exits back to one document. enterCompare
+    // is the single way in, as openPath is for opening.
+    void enterCompare(const QString &path);
+    void leaveCompare();
+    bool isComparing() const { return m_compareView != nullptr; }
+
 private:
     void buildToolBar();
     /// Builds one toolbar button: the glyph becomes the action's icon and the
@@ -81,6 +90,7 @@ private:
     void showOutline();
     /// Fullscreen, chrome withdrawn, one page at a time. Esc leaves.
     void setPresenting(bool on);
+
     /// One surface for a page number, a search term, or any action by name.
     /// What the reader typed decides which — MZ.md \ref 6.
     void showCommands();
@@ -93,6 +103,23 @@ private:
     void reloadDocument();
     void jumpToTypedPage();
     void onPageChanged(int index);
+
+    // Portals — MZ.md §9. A reader-made two-way link between two places, in
+    // one document or across two. Nothing about a reader's position is ever
+    // written without them asking for it.
+    static QString portalFilePath();
+    void loadPortals();
+    void savePortals() const;
+    /// Marks one end, or completes a portal if an end is already marked.
+    void markPortal();
+    /// Follows the portal touching the current page, opening the far document
+    /// if it is not the one on screen.
+    void followPortal();
+    void showPortals();
+
+    void chooseComparison();
+    /// Renders both documents small and marks the bands that differ.
+    void computeDiff();
 
     // Recent files — MX.md §7.
     static QString recentFilePath();
@@ -128,6 +155,11 @@ private:
     std::unique_ptr<Document> m_doc;
     PageView *m_view = nullptr;
     Overlay *m_overlay = nullptr;
+
+    /// The second document, for the length of a comparison only.
+    std::unique_ptr<Document> m_compareDoc;
+    PageView *m_compareView = nullptr;
+    QWidget *m_viewRow = nullptr;
     QToolBar *m_toolBar = nullptr;
 
     QAction *m_openAction = nullptr;
@@ -147,6 +179,20 @@ private:
 
     QMenu *m_recentMenu = nullptr;
     QStringList m_recent;
+
+    struct PortalEnd {
+        QString hash;
+        QString path;
+        int page = 0;
+    };
+    struct Portal {
+        PortalEnd a;
+        PortalEnd b;
+    };
+    QVector<Portal> m_portals;
+    /// One end held while the reader goes to find the other. Session only:
+    /// half a portal is not something to write down.
+    std::optional<PortalEnd> m_pendingEnd;
 
     QLineEdit *m_pageEdit = nullptr;
     QLabel *m_pageTotal = nullptr;
