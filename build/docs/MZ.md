@@ -794,6 +794,59 @@ git push origin v2.0.0
 
 ---
 
+### Z11 — The freeze audit, and what it cost — `v2.0.0`
+
+Not planned. Added because the user asked whether v2.0 could be frozen, and the
+honest way to answer was to look rather than to assert.
+
+Eleven agents audited the tree in parallel — three Opus on redaction, the
+privileged path and object lifetimes; four Sonnet on the socket, the state
+files, resource growth and UI correctness; one Fable on build and packaging;
+three more Opus on malformed input, the print path and an end-to-end threat
+model. A session limit killed seven of them mid-work, but every agent journalled
+continuously, so about 11,000 lines of findings survived rather than being lost
+with the agents.
+
+They produced **52 findings, 19 of them CRITICAL**. Every one was independently
+verified before a line was changed — an agent's confident false positive
+"fixed" is a fresh bug, and three of these turned out to be exactly that.
+
+The answer to the freeze question was **no**. Nine commits later it is yes.
+
+1. **Z11a** — the two crashes and the guards that were not guarding.
+   `isOpen()` returned true for a locked document, so every accessor
+   dereferenced a null catalog: 295 of 295 encrypted mutants crashed. And
+   poppler returns a **non-null 1×1 image** when it refuses an allocation,
+   which made every `isNull()` check in the tree inert — black printed pages,
+   documents reported "identical". Plus the privileged wipe, `PR_SET_DUMPABLE`,
+   absolute `pkexec`, SIGXFSZ, and the outline recursion bound.
+2. **Z11b** — withdraw redaction; make the audits audit. See §13.
+3. **Z11c** — the control socket stops blocking, and stops re-entering.
+4. **Z11d** — rotation-aware compare marks, one reset per document.
+5. **Z11e** — portals as records, honest print range, cached properties.
+6. **Z11f** — stop deleting through nested event loops; compare without the wait.
+7. **Z11g** — bound the caches, unclamp the fit modes, verify a portal's far end.
+8. **Z11h** — a long print can be watched, and stopped.
+9. **Z11i** — closing during a search waits, rather than aborting.
+
+Measured, before and after: entering compare on a 1000-page pair 9,100 ms →
+12 ms; document properties 54 ms → 0 ms; five idle socket clients 5.0 s →
+0.000 s; a 1000-page print 346 s frozen → progress bar with a working Cancel.
+
+> [!NOTE]
+> **Amended at Z11.** Three findings were *rejected* after measurement, and the
+> rejections are part of the record. Selection line breaks were reported wrong
+> at every non-zero rotation; they are not, because `setRotation` already clears
+> the word cache and the selection. Cache growth was reported at 73.6 MB over a
+> thousand pages; it measures 1.2 MB, because scrolling never fills the word
+> cache — only selecting does. The prune was kept anyway, as a bound rather than
+> a repair, and its commit message says so.
+
+The full disposition of all 51 findings — fixed with a commit, ruled, rejected
+with the evidence, or partial with the reason — is in `docs/audit/DISPOSITION.md`.
+That directory is scratch and is not tracked; this paragraph is the tracked
+record that it existed.
+
 ## 11. Release procedure
 
 - **Z1 through Z9:** commit locally, tag locally. No push, no build, no
