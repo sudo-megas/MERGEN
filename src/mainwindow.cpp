@@ -37,6 +37,7 @@
 #include <QPushButton>
 #include <QGridLayout>
 #include <QListWidget>
+#include <functional>
 #include <QStyleOptionToolButton>
 #include <QStylePainter>
 #include <QThread>
@@ -356,6 +357,11 @@ void MainWindow::buildToolBar() {
     // They are handled where focus actually is — in the page view's key
     // handler and in the search field's event filter.
 
+    auto *commandAction = new QAction(this);
+    commandAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+K")));
+    connect(commandAction, &QAction::triggered, this, &MainWindow::showCommands);
+    addAction(commandAction);
+
     auto *outlineAction = new QAction(this);
     outlineAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+T")));
     connect(outlineAction, &QAction::triggered, this, &MainWindow::showOutline);
@@ -663,6 +669,127 @@ void MainWindow::watchDocument(const QString &path) {
 }
 
 // --- Printing --------------------------------------------------------------
+
+void MainWindow::showCommands() {
+    // Unlike the other overlays this one opens with no document: Open is an
+    // action, and reaching it by name is the point.
+    auto *content = new QWidget;
+    auto *column = new QVBoxLayout(content);
+    column->setContentsMargins(0, 0, 0, 0);
+    column->setSpacing(8);
+
+    auto *entry = new QLineEdit(content);
+    entry->setPlaceholderText(tr("Page number, text to find, or an action"));
+    entry->setAccessibleName(tr("Command"));
+    column->addWidget(entry);
+
+    auto *list = new QListWidget(content);
+    list->setFrameShape(QFrame::NoFrame);
+    list->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    list->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    list->setAutoFillBackground(false);
+    list->viewport()->setAutoFillBackground(false);
+    list->setBackgroundRole(QPalette::NoRole);
+    list->viewport()->setBackgroundRole(QPalette::NoRole);
+    list->setFocusPolicy(Qt::NoFocus);
+    column->addWidget(list);
+
+    // What each row does, parallel to the rows themselves.
+    auto *deeds = new QVector<std::function<void()>>;
+    content->connect(content, &QObject::destroyed, [deeds] { delete deeds; });
+
+    const auto rebuild = [this, list, deeds](const QString &typed) {
+        list->clear();
+        deeds->clear();
+        const QString text = typed.trimmed();
+
+        const auto add = [list, deeds](const QString &label, std::function<void()> deed) {
+            new QListWidgetItem(label, list);
+            deeds->append(std::move(deed));
+        };
+
+        // A number is a page, when the document has one by that name.
+        bool isNumber = false;
+        const int page = text.toInt(&isNumber);
+        if (isNumber && m_doc->isOpen() && page >= 1 && page <= m_doc->pageCount()) {
+            add(tr("Go to page %1").arg(page), [this, page] { m_view->scrollToPage(page - 1); });
+        }
+
+        // Actions are offered by how well they answer what was typed. A name
+        // the text begins is very likely what the reader meant, so it outranks
+        // the find; a name that merely contains the text does not, because a
+        // word being searched for should not run something by accident.
+        const auto offerActions = [&](bool prefixOnly) {
+            for (QAction *action :
+                 {m_openAction, m_zoomOutAction, m_zoomInAction, m_fitWidthAction, m_fitPageAction,
+                  m_rotateAction, m_searchAction, m_printAction}) {
+                if (!action || !action->isEnabled()) {
+                    continue;
+                }
+                const bool starts = action->text().startsWith(text, Qt::CaseInsensitive);
+                const bool holds = action->text().contains(text, Qt::CaseInsensitive);
+                // With nothing typed there is nothing to rank against, so every
+                // action belongs in the general pass and none in the prefix one.
+                if (text.isEmpty() ? prefixOnly : (prefixOnly ? !starts : (starts || !holds))) {
+                    continue;
+                }
+                add(action->text(), [action] { action->trigger(); });
+            }
+        };
+
+        if (!text.isEmpty()) {
+            offerActions(true);
+        }
+
+        // Anything else that is not a bare number is something to look for.
+        if (!text.isEmpty() && !isNumber && m_doc->isOpen()) {
+            add(tr("Find \u201C%1\u201D").arg(text), [this, text] {
+                openSearch();
+                m_searchEdit->setText(text);
+                startSearch();
+            });
+        }
+
+        offerActions(false);
+
+        int rows = 0;
+        for (int i = 0; i < list->count(); ++i) {
+            rows += list->sizeHintForRow(i);
+        }
+        list->setFixedHeight(rows + 2);
+        if (list->count() > 0) {
+            list->setCurrentRow(0);
+        }
+        // The panel is already up when the reader types, so it has to keep
+        // pace with a list that grows and shrinks under them.
+        if (m_overlay->isPresented()) {
+            m_overlay->relayout();
+        }
+    };
+
+    const auto run = [this, list, deeds] {
+        const int row = list->currentRow();
+        if (row < 0 || row >= deeds->size()) {
+            return;
+        }
+        // Copied before the overlay dismisses, which destroys the row it lives on.
+        const std::function<void()> deed = deeds->at(row);
+        m_overlay->dismiss();
+        deed();
+    };
+
+    connect(entry, &QLineEdit::textChanged, this, rebuild);
+    connect(entry, &QLineEdit::returnPressed, this, run);
+    connect(list, &QListWidget::itemClicked, this, [run](QListWidgetItem *) { run(); });
+
+    // Up and Down belong to the list while the reader is typing into the field.
+    entry->installEventFilter(this);
+    entry->setProperty("mergenCommandList", QVariant::fromValue(static_cast<QObject *>(list)));
+
+    rebuild(QString());
+    m_overlay->present(tr("Command"), content);
+    entry->setFocus(Qt::OtherFocusReason);
+}
 
 void MainWindow::showOutline() {
     if (!m_doc || !m_doc->isOpen()) {
@@ -1067,6 +1194,22 @@ void MainWindow::updateSearchStatus() {
 }
 
 bool MainWindow::eventFilter(QObject *watched, QEvent *event) {
+    // The command field keeps focus while Up and Down move its list, so the
+    // reader never has to leave what they are typing to choose a row.
+    if (event->type() == QEvent::KeyPress) {
+        const QVariant carried = watched->property("mergenCommandList");
+        if (carried.isValid()) {
+            auto *list = qobject_cast<QListWidget *>(carried.value<QObject *>());
+            auto *key = static_cast<QKeyEvent *>(event);
+            if (list && list->count() > 0 &&
+                (key->key() == Qt::Key_Down || key->key() == Qt::Key_Up)) {
+                const int step = key->key() == Qt::Key_Down ? 1 : -1;
+                const int row = (list->currentRow() + step + list->count()) % list->count();
+                list->setCurrentRow(row);
+                return true;
+            }
+        }
+    }
     if (watched == m_searchEdit && event->type() == QEvent::KeyPress) {
         auto *key = static_cast<QKeyEvent *>(event);
         if (key->key() == Qt::Key_Escape) {

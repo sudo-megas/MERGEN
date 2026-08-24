@@ -42,6 +42,10 @@ public:
 
     bool isPresented() const;
 
+    /// Re-measures the panel against its content. Called when content changes
+    /// size while the overlay is already up.
+    void relayout();
+
 Q_SIGNALS:
     void dismissed();
 
@@ -52,8 +56,6 @@ protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
-    void layoutPanel();
-
     QWidget *m_panel = nullptr;
     QLabel *m_title = nullptr;
     QScrollArea *m_scroll = nullptr;

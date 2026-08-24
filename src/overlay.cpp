@@ -144,7 +144,7 @@ void Overlay::present(const QString &title, QWidget *content) {
     if (parentWidget()) {
         setGeometry(parentWidget()->rect());
     }
-    layoutPanel();
+    relayout();
     show();
     raise();
     setFocus(Qt::OtherFocusReason);
@@ -164,7 +164,7 @@ void Overlay::dismiss() {
     Q_EMIT dismissed();
 }
 
-void Overlay::layoutPanel() {
+void Overlay::relayout() {
     if (!parentWidget()) {
         return;
     }
@@ -236,7 +236,7 @@ void Overlay::mousePressEvent(QMouseEvent *event) {
 bool Overlay::eventFilter(QObject *watched, QEvent *event) {
     if (watched == parentWidget() && event->type() == QEvent::Resize && isVisible()) {
         setGeometry(parentWidget()->rect());
-        layoutPanel();
+        relayout();
     }
     return QWidget::eventFilter(watched, event);
 }
