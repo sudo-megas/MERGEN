@@ -140,5 +140,15 @@ int main(int argc, char *argv[]) {
     }
 
     ::close(fd);
+    // A short read is not a successful read. st_size was a snapshot; if the
+    // file shrank underneath us the loop ends early with no error to report,
+    // and the caller would open a truncated document believing it whole.
+    // poppler reconstructs a broken xref rather than refusing, so nothing
+    // downstream would notice. Say so here, where the truth is still known.
+    if (sent != limit) {
+        ::close(fd);
+        return fail("file changed while it was being read");
+    }
+
     return 0;
 }

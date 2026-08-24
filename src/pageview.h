@@ -140,6 +140,9 @@ public:
     void previousSearchHit();
 
     static constexpr double kMinZoom = 0.10;
+    /// How far a fit mode may shrink. Far below kMinZoom, because a page can be
+    /// arbitrarily large and fitting it is not a preference the reader set.
+    static constexpr double kMinFitZoom = 0.001;
     static constexpr double kMaxZoom = 10.0;
     static constexpr double kZoomStep = 0.10;
 

@@ -450,9 +450,41 @@ void PageView::setNightMode(bool on) {
 }
 
 void PageView::dropPagesOutside(int first, int last) {
-    for (auto it = m_cache.begin(); it != m_cache.end();) {
-        if (it.key() < first || it.key() > last) {
-            it = m_cache.erase(it);
+    // Every per-page cache, not only the images. m_words and m_links were
+    // added later and never pruned, so they accumulated for every page the
+    // reader ever selected on or hovered a link over.
+    //
+    // Honest about the size of this: on a thousand-page document, selecting on
+    // every page twice, the measured difference is about 1 MB — the audit's
+    // figure of 73.6 MB did not reproduce, because pruning only matters for
+    // text-dense pages and the test document is sparse. This is a bound, not a
+    // leak repair. It is kept because an unbounded cache on a dense document
+    // has no ceiling at all, and the cost of bounding it is four lines.
+    //
+    // Dropping a page's words is safe: they are re-fetched on next use.
+    const auto prune = [first, last](auto &cache) {
+        for (auto it = cache.begin(); it != cache.end();) {
+            if (it.key() < first || it.key() > last) {
+                it = cache.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    };
+    prune(m_cache);
+    prune(m_links);
+    // Not m_diffBands. It is small — two doubles per marked band — and it is
+    // the answer to a question about the document rather than a per-page
+    // render resource. Pruning it would make hasDiffBands() depend on where
+    // the reader happens to be scrolled, which is not what it means.
+
+    // Words are kept for the pages the selection spans, wherever they are.
+    const int anchor = m_selectionAnchor.isValid() ? m_selectionAnchor.page : -1;
+    const int cursor = m_selectionCursor.isValid() ? m_selectionCursor.page : -1;
+    for (auto it = m_words.begin(); it != m_words.end();) {
+        const bool held = it.key() == anchor || it.key() == cursor;
+        if (!held && (it.key() < first || it.key() > last)) {
+            it = m_words.erase(it);
         } else {
             ++it;
         }
@@ -1076,7 +1108,10 @@ double PageView::zoomForFitMode(Poppler::Page::Rotation rotation) const {
         factor = qMin(factor, usableHeight / tallest);
     }
 
-    return qBound(kMinZoom, factor, kMaxZoom);
+    // kMinZoom is the floor for zooming by hand. A fit mode is a measurement,
+    // not a preference: clamping it made a very large page render at 289x the
+    // area it was asked for, and a 793-byte file allocate gigabytes on open.
+    return qBound(kMinFitZoom, factor, kMaxZoom);
 }
 
 PageView::Anchor PageView::captureAnchor() const {

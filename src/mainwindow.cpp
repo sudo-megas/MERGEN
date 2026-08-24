@@ -12,6 +12,8 @@
 #include "license.h"
 
 #include <QAction>
+#include <cstring>
+
 #include <QApplication>
 #include <QDir>
 #include <QFile>
@@ -725,6 +727,19 @@ QByteArray MainWindow::readElevated(const QString &path, QString *error) const {
     QByteArray bytes = pkexec.readAllStandardOutput();
     if (bytes.isEmpty()) {
         *error = tr("%1 cannot be read.").arg(name);
+        return QByteArray();
+    }
+
+    // The helper checks the magic before it sends anything, so its absence here
+    // means the stream was not the helper's — a shim on the path, a truncated
+    // pipe, a wrapper that printed something of its own. Refusing costs an
+    // authorisation the reader already gave; accepting hands poppler bytes of
+    // unknown origin obtained with root.
+    if (!bytes.startsWith("%PDF-")) {
+        std::memset(bytes.data(), 0, static_cast<size_t>(bytes.size()));
+        bytes.clear();
+        *error = tr("%1 cannot be read.").arg(name);
+        return QByteArray();
     }
     return bytes;
 }
@@ -992,11 +1007,27 @@ void MainWindow::followPortal() {
                                   .arg(QFileInfo(to->path).fileName()));
             return;
         }
+        // Copied out before openPath, not read through `to` after it: `to`
+        // points into m_portals, and openPath's call graph is long enough that
+        // "nothing in it reloads the portal list" is a promise better kept by
+        // not needing it.
         const int target = to->page;
-        openPath(to->path);
-        if (m_doc->isOpen()) {
-            m_view->scrollToPage(target);
+        const QString expected = to->hash;
+        const QString farPath = to->path;
+        openPath(farPath);
+        if (!m_doc->isOpen()) {
+            return;
         }
+        // A path is not an identity. The file at the far end may have been
+        // replaced since the portal was made — same name, different document —
+        // and jumping to page 40 of a stranger looks exactly like working.
+        // The hash was recorded for this; use it rather than trusting the path.
+        if (!expected.isEmpty() && m_doc->contentHash() != expected) {
+            m_view->setNotice(tr("%1 is not the document this portal was made in.")
+                                  .arg(QFileInfo(farPath).fileName()));
+            return;
+        }
+        m_view->scrollToPage(target);
         return;
     }
     m_view->setNotice(tr("No portal on this page."));
@@ -1607,6 +1638,17 @@ void MainWindow::printDocument() {
     from = qBound(1, from, m_doc->pageCount());
     to = qBound(from, to, m_doc->pageCount());
 
+    // A document that only root could read must not be written back out where
+    // anyone can read it. Printing to a *printer* is fine — the reader
+    // authenticated and the bytes go to paper — but printing to a file leaves
+    // an unprivileged copy on disk that outlives the authorisation entirely.
+    // The same reasoning refuses redaction on such a document (§13).
+    if (!m_doc->data().isEmpty() && !printer.outputFileName().isEmpty()) {
+        m_view->setNotice(
+            tr("A document opened with elevated permission cannot be printed to a file."));
+        return;
+    }
+
     // Printing to a file must not land on the document being read. Redaction
     // is held to this in §8; printing was not.
     if (printer.outputFormat() == QPrinter::PdfFormat && !printer.outputFileName().isEmpty()) {
@@ -1907,8 +1949,23 @@ void MainWindow::loadRecent() {
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
         return; // A missing state file is never an error the user sees.
     }
-    const QString text = QString::fromUtf8(file.readAll());
+    QString text = QString::fromUtf8(file.readAll());
     file.close();
+
+    // Comments are not values. The bracket scan below reads the whole file, so
+    // a "#" line containing a bracket could otherwise inject an entry.
+    {
+        QStringList kept;
+        const QStringList lines = text.split(QLatin1Char('\n'));
+        kept.reserve(lines.size());
+        for (const QString &line : lines) {
+            const QString trimmed = line.trimmed();
+            if (!trimmed.startsWith(QLatin1Char('#'))) {
+                kept.append(line);
+            }
+        }
+        text = kept.join(QLatin1Char('\n'));
+    }
 
     // Deliberately trivial: MERGEN writes this file and reads only what it
     // writes. Anything unexpected yields an empty list, which the next open

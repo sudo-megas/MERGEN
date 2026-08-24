@@ -878,6 +878,29 @@ candidates, with what each costs:
 
 Nothing is built toward any of them before the ruling.
 
+**Where an elevated document may go.** A file the reader could only open by
+authenticating to `pkexec` is in memory as plaintext that their own account has
+no right to. Three ways out of the process were considered at Z11, and they are
+not ruled the same way:
+
+- *Redaction* — refused. It writes a new file derived from the original, and
+  the refusal predates the withdrawal below.
+- *Printing to a file* — refused, at Z11. Printing to a *printer* is allowed:
+  the reader authenticated, and the bytes go to paper. Printing to a file leaves
+  an unprivileged copy on disk that outlives the authorisation entirely, which
+  is the same objection as redaction with none of the difficulty.
+- *The clipboard* — **allowed**, deliberately. This is the inconsistent-looking
+  one, so the reasoning is written down rather than left to be rediscovered. A
+  selection is text the reader has already read on screen; the clipboard is
+  volatile, holds what fits in a selection rather than the document, and is the
+  only way to act on what they authenticated to see. Refusing it would make the
+  elevation path nearly useless while stopping nobody who can retype a line.
+  The guarantee MERGEN makes is that it will not *write a file*; it is not that
+  an authenticated reader cannot use what they were shown.
+
+If that trade is ever revisited, the thing to change is the clipboard, not the
+other two.
+
 **An opt-out for motion.** Motion is unconditional because Qt offers nothing on
 this platform to condition it on — see the amendment in §9. A reader who wants
 none has no way to say so. The options are an environment variable read at
