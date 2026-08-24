@@ -1,5 +1,5 @@
 set -u
-MERGEN=<repo>/build/mergen
+MERGEN=${MERGEN:-$PWD/build/mergen}
 export QT_QPA_PLATFORM=offscreen
 SOCK="${XDG_RUNTIME_DIR:-/tmp}/mergen-$(id -u).sock"
 fails=0

@@ -34,7 +34,7 @@ static QAction *byShortcut(QObject *r, const char *k){
 }
 int main(int argc, char **argv) {
     QApplication app(argc, argv);
-    const QString repo = QStringLiteral("<repo>/");
+    const QString repo = QStringLiteral(""); // fixtures live in the working directory
 
     std::printf("\n--- A: a locked document is not open, and does not crash ---\n");
     {

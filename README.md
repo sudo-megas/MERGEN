@@ -6,10 +6,12 @@
 <p align="center"><strong>A minimal PDF viewer for Arch Linux</strong></p>
 
 <p align="center">
-  <img alt="Arch Linux package" src="https://img.shields.io/badge/Arch%20Linux-3.59%20MB-1793D1?style=for-the-badge&logo=archlinux&logoColor=white">
+  <img alt="Arch Linux package" src="https://img.shields.io/badge/Arch%20Linux-352%20KB-1793D1?style=for-the-badge&logo=archlinux&logoColor=white">
+</p>
+
 <p align="center">
   <img alt="Display Server"       src="https://img.shields.io/badge/Display Server-Wayland-FFBC00?style=for-the-badge&logo=linux&logoColor=white">
-  <img alt="Version"              src="https://img.shields.io/badge/version-2.0.0-ADEBB3?style=for-the-badge">
+  <img alt="Version"              src="https://img.shields.io/badge/version-2.0.1-ADEBB3?style=for-the-badge">
   <img alt="Release date"         src="https://img.shields.io/badge/released-2026--08--24-D1D6DB?style=for-the-badge">
   <img alt="Licence"              src="https://img.shields.io/badge/licence-GPL--3.0--only-772953?style=for-the-badge">
 </p>
@@ -48,10 +50,10 @@ Written in C++20 with Qt6 and poppler. No KDE Frameworks, no desktop-environment
 
 ### Arch Linux
 
-Download `mergen-2.0.0-1-x86_64.pkg.tar.zst` from the Releases page:
+Download `mergen-2.0.1-1-x86_64.pkg.tar.zst` from the Releases page:
 
 ```sh
-sudo pacman -U mergen-2.0.0-1-x86_64.pkg.tar.zst
+sudo pacman -U mergen-2.0.1-1-x86_64.pkg.tar.zst
 ```
 
 Or build from source:

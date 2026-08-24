@@ -29,8 +29,17 @@ run it with `bash z8check.sh` from a directory holding the test PDFs.
 
 ## Test documents
 
-The suites expect these in the working directory. They live in the MERGEN repo
-root (untracked):
+The suites expect these in the working directory. Write them with:
+
+    python3 build/docs/tests/make-fixtures.py
+
+from the directory the suites will run in — the repository root. That script is
+the definitive description of every fixture; the table below is a summary of it.
+
+Earlier revisions of this file said the documents were produced by scripts and
+pointed at the git history for them. That was not true: the scripts were ad hoc
+and never committed, so deleting the PDFs made all eleven suites unrunnable.
+Hence the generator.
 
 | file | what it is |
 |---|---|
@@ -41,7 +50,13 @@ root (untracked):
 | `colour.pdf` | flat colour swatches — for night mode |
 | `evil.pdf` | carries embedded JavaScript and a form field |
 
-They are written by small python scripts writing raw PDF; see the git history
+They are written as raw PDF by `make-fixtures.py`, which needs no library and no
+network. Coordinates in them are not arbitrary: z10 redacts `QRectF(60, 650,
+460, 25)` and the "haystack" line has to fall inside it, which was measured with
+`pdftotext -bbox` rather than guessed. z3 expects a specific outline shape.
+Changing the generator means re-running the suites, not just eyeballing a page.
+
+The old note said: see the git history
 of this session or regenerate from the structure in any of them.
 
 ## Under sanitizers
@@ -78,8 +93,8 @@ this scope`.
 | `large.pdf` | 1000 pages of A4 | the cache-growth bound |
 | `locked.pdf` | password-protected | the locked-document checks |
 
-`huge.pdf` is generated, not found; the generator is inline in the Z11g work
-and rebuilding it is four lines of Python writing a minimal xref.
+`locked.pdf` needs `qpdf` on the path; without it the generator skips that file
+and says so.
 
 ### Working directory
 

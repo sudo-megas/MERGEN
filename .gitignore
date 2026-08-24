@@ -15,3 +15,26 @@
 .cache/
 compile_commands.json
 
+
+# Fixtures for the acceptance suites. Written by
+# build/docs/tests/make-fixtures.py rather than tracked — they are derived, and
+# large.pdf alone is 300 KB.
+/test.pdf
+/outline.pdf
+/outline-v2.pdf
+/annot.pdf
+/colour.pdf
+/evil.pdf
+/huge.pdf
+/large.pdf
+/locked.pdf
+/out.pdf
+/renamed.pdf
+/redacted.pdf
+/src.pdf
+
+# Compiled acceptance suites, and the directory z9 makes for its portal test.
+/build/docs/tests/z*check
+!/build/docs/tests/z*check.cpp
+!/build/docs/tests/z*check.sh
+/z11/

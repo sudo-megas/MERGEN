@@ -122,9 +122,22 @@ Written for and tested on: Arch Linux, Wayland, Niri, `prefer-no-csd` enabled.
 | `poppler-qt6` | PDF parsing, page rendering to `QImage`, text extraction, search, annotation and outline access |
 | `ttf-cascadia-code-nerd` | Toolbar icon glyphs — see §6. Verified against 3.5.0-1 (Nerd Fonts 3.5.0, font revision 2407.024): all nine code points MERGEN uses are present. Qt6 does not fall back to another installed font for a missing glyph the way Qt5 did (QTBUG-110502), so this is checked rather than assumed — and `IconSet` refuses to draw a glyph the font does not carry, leaving the label alone rather than a tofu box |
 | `polkit` | `pkexec`, for opening PDFs the reader may not read |
-| `qpdf` | Content-level redaction — see below |
+| `qpdf` | Content-level redaction — see below. **Build-time only since 2.0.1** |
 
-Build-time only: `cmake`, `ninja`, `gcc`.
+Build-time only: `cmake`, `ninja`, `gcc`, `qpdf`.
+
+> [!NOTE]
+> **Amended at 2.0.1.** `qpdf` moved from `depends` to `makedepends`. Redaction
+> was withdrawn at Z11 (§13) and its code, though still compiled, is called from
+> nowhere; makepkg builds with LTO, so the optimiser drops those functions as
+> unreachable, the references to `libqpdf` go with them, and `--as-needed` then
+> leaves no `NEEDED` entry at all. Verified against the published 2.0.0 binary:
+> no `libqpdf` in `readelf -d`, no qpdf symbols, no qpdf strings. Every reader
+> was installing a library their copy never loads.
+>
+> It stays a build dependency because the source still has to compile and link
+> against it before LTO removes it. **If redaction is ever reachable again this
+> moves back** — the thing to check is the binary, not the version number.
 
 **`qpdf` is the one new package, and it is here for exactly one job.** Redaction
 that draws an opaque rectangle over a name and saves the file is not redaction;

@@ -1,15 +1,29 @@
 # Maintainer: MEGAS <halil@namli.xyz>
 
 pkgname=mergen
-pkgver=2.0.0
+pkgver=2.0.1
 pkgrel=1
 pkgdesc='A minimal PDF viewer'
 arch=('x86_64')
 url='https://github.com/sudo-megas/MERGEN'
 license=('GPL-3.0-only')
-depends=('qt6-base' 'poppler-qt6' 'qpdf' 'polkit' 'ttf-cascadia-code-nerd' 'hicolor-icon-theme')
-makedepends=('cmake' 'ninja' 'gcc' 'git')
-# qpdf is here for content-level redaction and nothing else — MZ.md §3.
+depends=('qt6-base' 'poppler-qt6' 'polkit' 'ttf-cascadia-code-nerd' 'hicolor-icon-theme')
+makedepends=('cmake' 'ninja' 'gcc' 'git' 'qpdf')
+# qpdf builds this package but does not run it, which is why it moved to
+# makedepends at 2.0.1.
+#
+# It is there for content-level redaction and nothing else — MZ.md §3. Redaction
+# was withdrawn at Z11 and its code, though still compiled, is called from
+# nowhere. makepkg builds with LTO on (OPTIONS=lto), so the optimiser drops
+# those functions as unreachable, the references to libqpdf go with them, and
+# -Wl,--as-needed then leaves no NEEDED entry at all. Verified against the
+# published 2.0.0 binary: no libqpdf in readelf -d, no qpdf symbols, no qpdf
+# strings. Installing it was making every reader carry a library their copy
+# never loads.
+#
+# It stays in makedepends because the source still has to compile and link
+# against it before LTO removes it. If redaction is ever reachable again, this
+# moves back to depends — that is the check to make, not a version to trust.
 #
 # The licence stays GPL-3.0-only, which is what every source file in the tree
 # declares. It differs from TRITIUM's -or-later on purpose: a licence is not
