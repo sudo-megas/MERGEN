@@ -23,7 +23,10 @@ r=$(say "goto 2"); chk "$([ "$r" = "NOSOCKET" ] && echo 1 || echo 0)" "nothing a
 
 echo; echo "--- start one instance ---"
 $MERGEN outline.pdf & M1=$!
-sleep 2
+# Waited for, not slept on. Two seconds is plenty on a warm desktop and not
+# always enough on a cold machine — Qt, poppler and a document have to come up
+# first — and a fixed sleep turns that into a test that fails for being early.
+for _ in $(seq 1 60); do [ -S "$SOCK" ] && break; sleep 0.5; done
 [ -S "$SOCK" ] && chk 1 "the socket exists at \$XDG_RUNTIME_DIR/mergen-\$UID.sock" || chk 0 "socket missing"
 
 echo; echo "--- commands, driven from plain python (no Qt, no session bus) ---"
@@ -48,7 +51,7 @@ chk "$([ "$before" = "$after" ] && echo 1 || echo 0)" "still exactly one process
 
 echo; echo "--- quit over the socket ---"
 r=$(say "quit"); chk "$([ "$r" = "ok" ] && echo 1 || echo 0)" "quit          -> $r"
-sleep 2
+for _ in $(seq 1 40); do kill -0 $M1 2>/dev/null || break; sleep 0.5; done
 kill -0 $M1 2>/dev/null && { chk 0 "the instance exited"; kill -9 $M1 2>/dev/null; } || chk 1 "the instance exited"
 
 echo; echo "--- a stale socket from a crashed instance is taken over ---"
@@ -59,8 +62,9 @@ s=socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); s.bind('$SOCK'); s.close()
 "   # a file that looks like a socket but nothing is listening
 [ -S "$SOCK" ] && echo "      left a stale socket file behind"
 $MERGEN outline.pdf & M2=$!
-sleep 2
-r=$(say "goto 2")
+# The stale socket file is already there, so its existence proves nothing this
+# time. Wait for something to actually answer on it.
+for _ in $(seq 1 60); do r=$(say "goto 2"); [ "$r" = "ok" ] && break; sleep 0.5; done
 chk "$([ "$r" = "ok" ] && echo 1 || echo 0)" "a fresh instance replaced the stale socket (got: $r)"
 kill $M2 2>/dev/null; sleep 1; kill -9 $M2 2>/dev/null
 rm -f "$SOCK"

@@ -71,12 +71,22 @@ int main(int argc, char **argv) {
     w.openPath(QStringLiteral("test.pdf"));
     QAction *search = nullptr;
     for (QAction *a : w.findChildren<QAction *>()) if (a->text() == "Search") search = a;
+    // Compared against itself, not asserted absolutely. What Esc must not do is
+    // change the page counter — and whether the counter is on the toolbar at all
+    // depends on whether the toolbar fits, which depends on the font metrics of
+    // whatever fonts the machine happens to have. Asserting isVisible() outright
+    // measured the environment: on a box carrying only a wide monospace face the
+    // toolbar overflows at this width and the counter moves into the extension
+    // menu, failing a check about Esc for reasons that have nothing to do with
+    // Esc. Reproduced with an empty fontconfig.
+    const bool counterWasVisible = pageEdit->isVisible();
     search->trigger();
     check(searchEdit->isVisible(), "search bar opened");
-    check(pageEdit->isVisible(), "page counter is visible (and is NOT the search field)");
+    check(pageEdit->isVisible() == counterWasVisible,
+          "opening search did not disturb the page counter (it is NOT the search field)");
     esc->trigger();
     check(!searchEdit->isVisible(), "Esc closed the search bar (dispatcher fell through)");
-    check(pageEdit->isVisible(), "page counter untouched by Esc");
+    check(pageEdit->isVisible() == counterWasVisible, "page counter untouched by Esc");
 
     std::printf("\n--- a document that carries JavaScript says so ---\n");
     Document d;

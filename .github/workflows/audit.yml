@@ -59,9 +59,15 @@ jobs:
       - name: Install the toolchain
         run: |
           pacman -Syu --noconfirm
+          # ttf-dejavu as well as the font the package depends on: a container
+          # carrying only a wide monospace face is not what this runs on, and
+          # toolbar layout follows font metrics. The suites no longer assert
+          # toolbar visibility outright, but the environment should still
+          # resemble a desktop rather than being unlike every machine MERGEN
+          # is used on.
           pacman -S --needed --noconfirm \
             git cmake ninja gcc python \
-            qt6-base poppler-qt6 qpdf polkit ttf-cascadia-code-nerd
+            qt6-base poppler-qt6 qpdf polkit ttf-cascadia-code-nerd ttf-dejavu
 
       - name: Fetch the tree
         uses: actions/checkout@v4
