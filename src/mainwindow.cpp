@@ -4,6 +4,7 @@
 
 #include "mainwindow.h"
 #include "document.h"
+#include "control.h"
 #include "iconset.h"
 #include "overlay.h"
 #include "pageview.h"
@@ -692,6 +693,76 @@ void MainWindow::watchDocument(const QString &path) {
 }
 
 // --- Printing --------------------------------------------------------------
+
+bool MainWindow::listenForCommands() {
+    m_control = new Control(
+        [this](const QString &verb, const QString &argument) { return runCommand(verb, argument); },
+        this);
+    return m_control->listen();
+}
+
+QString MainWindow::runCommand(const QString &verb, const QString &argument) {
+    const QString ok = QStringLiteral("ok");
+    const auto err = [](const QString &why) { return QStringLiteral("err: ") + why; };
+
+    if (verb == QLatin1String("open")) {
+        if (argument.isEmpty()) {
+            return err(QStringLiteral("open needs a path"));
+        }
+        openPath(argument);
+        // Raising is the point of handing a file to a running instance: the
+        // reader asked for this document to be in front of them.
+        raise();
+        activateWindow();
+        return m_doc->isOpen() ? ok : err(QStringLiteral("could not open ") + argument);
+    }
+    if (verb == QLatin1String("goto")) {
+        bool number = false;
+        const int page = argument.toInt(&number);
+        if (!number) {
+            return err(QStringLiteral("goto needs a page number"));
+        }
+        if (!m_doc->isOpen()) {
+            return err(QStringLiteral("no document"));
+        }
+        if (page < 1 || page > m_doc->pageCount()) {
+            return err(QStringLiteral("no page %1").arg(page));
+        }
+        m_view->scrollToPage(page - 1);
+        return ok;
+    }
+    if (verb == QLatin1String("search")) {
+        if (!m_doc->isOpen()) {
+            return err(QStringLiteral("no document"));
+        }
+        if (argument.isEmpty()) {
+            return err(QStringLiteral("search needs a term"));
+        }
+        openSearch();
+        m_searchEdit->setText(argument);
+        startSearch();
+        return ok;
+    }
+    if (verb == QLatin1String("next") || verb == QLatin1String("prev")) {
+        if (m_view->searchHitCount() == 0) {
+            return err(QStringLiteral("no search hits"));
+        }
+        if (verb == QLatin1String("next")) {
+            m_view->nextSearchHit();
+        } else {
+            m_view->previousSearchHit();
+        }
+        updateSearchStatus();
+        return ok;
+    }
+    if (verb == QLatin1String("quit")) {
+        // Answer before leaving, so the caller is not left waiting on a socket
+        // that is about to close.
+        QMetaObject::invokeMethod(this, &MainWindow::close, Qt::QueuedConnection);
+        return ok;
+    }
+    return err(QStringLiteral("unknown command ") + verb);
+}
 
 void MainWindow::setPresenting(bool on) {
     if (m_view->isPresenting() == on) {

@@ -21,7 +21,7 @@ endif()
 
 include(GNUInstallDirs)
 
-find_package(Qt6 6.5 REQUIRED COMPONENTS Widgets PrintSupport)
+find_package(Qt6 6.5 REQUIRED COMPONENTS Widgets PrintSupport Network)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(POPPLER_QT6 REQUIRED IMPORTED_TARGET poppler-qt6)
 
@@ -48,7 +48,9 @@ add_executable(mergen
     src/iconset.cpp
     src/iconset.h
     src/overlay.cpp
-    src/overlay.h)
+    src/overlay.h
+    src/control.cpp
+    src/control.h)
 
 target_compile_definitions(mergen PRIVATE
     MERGEN_VERSION="${PROJECT_VERSION}"
@@ -64,6 +66,7 @@ target_include_directories(mergen PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 target_link_libraries(mergen PRIVATE
     Qt6::Widgets
     Qt6::PrintSupport
+    Qt6::Network
     PkgConfig::POPPLER_QT6)
 
 add_executable(mergen-open src/mergen-open.cpp)

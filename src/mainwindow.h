@@ -28,6 +28,7 @@ class QToolButton;
 
 namespace mergen {
 
+class Control;
 class Document;
 class Overlay;
 class PageView;
@@ -41,8 +42,13 @@ public:
     ~MainWindow() override;
 
     /// The single entry point for every way a document is opened: argv[1], the
-    /// file dialog, and the recent-files dropdown all land here.
+    /// file dialog, the recent-files dropdown and the control socket all land
+    /// here.
     void openPath(const QString &path);
+
+    /// Takes the control socket. False when another instance already holds it,
+    /// which makes this process the second one — MZ.md §9.
+    bool listenForCommands();
 
 private:
     void buildToolBar();
@@ -158,6 +164,11 @@ private:
     /// one starts, so there is never more than one document handle in flight.
     QThread *m_searchThread = nullptr;
     QPointer<SearchWorker> m_searchWorker;
+
+    /// Answers one socket command, in the reader's own words back.
+    QString runCommand(const QString &verb, const QString &argument);
+
+    Control *m_control = nullptr;
 
     /// Guards against re-entering openPath from a nested event loop.
     bool m_opening = false;
