@@ -194,6 +194,10 @@ void Overlay::layoutPanel() {
         if (contentHeight <= 0) {
             contentHeight = content->sizeHint().height();
         }
+        // A view's sizeHint is its own idea of a good size and ignores a height
+        // fixed on it from outside — an item view asked to be exactly as tall as
+        // its rows still reports the default. Honour the constraint.
+        contentHeight = qBound(content->minimumHeight(), contentHeight, content->maximumHeight());
         height = contentHeight + chrome;
     }
 

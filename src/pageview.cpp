@@ -19,6 +19,17 @@
 #include <limits>
 
 namespace mergen {
+namespace {
+
+/// How long the pointer must be held on a link before its target is peeked.
+/// Long enough that a click through a link is never mistaken for a peek, short
+/// enough that holding does not feel like waiting.
+constexpr int kPeekHoldMs = 300;
+
+/// How far the pointer may drift while held before the peek is called off.
+constexpr int kPeekSlopPx = 6;
+
+} // namespace
 
 PageView::PageView(QWidget *parent) : QAbstractScrollArea(parent) {
     viewport()->setAutoFillBackground(false);
@@ -26,6 +37,18 @@ PageView::PageView(QWidget *parent) : QAbstractScrollArea(parent) {
     setFocusPolicy(Qt::StrongFocus);
     setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    // Mouse tracking so a held press can be called off when the pointer drifts
+    // off the link it started on.
+    viewport()->setMouseTracking(true);
+
+    m_peekTimer = new QTimer(this);
+    m_peekTimer->setSingleShot(true);
+    connect(m_peekTimer, &QTimer::timeout, this, [this] {
+        if (m_peekPage >= 0) {
+            m_peeking = true;
+            Q_EMIT linkPeekRequested(m_peekPage);
+        }
+    });
 }
 
 void PageView::setDocument(Document *doc) {
@@ -33,6 +56,7 @@ void PageView::setDocument(Document *doc) {
     m_message.clear();
     m_cache.clear();
     m_words.clear();
+    m_links.clear();
     m_hits.clear();
     m_currentHit = -1;
     m_selectionAnchor = Position();
@@ -259,11 +283,52 @@ void PageView::paintNotice(QPainter &painter) {
     painter.restore();
 }
 
+const QVector<PageLink> &PageView::linksOf(int page) {
+    auto found = m_links.constFind(page);
+    if (found != m_links.constEnd()) {
+        return found.value();
+    }
+    QVector<PageLink> links;
+    if (m_doc) {
+        links = m_doc->pageLinks(page, m_rotation);
+    }
+    return *m_links.insert(page, links);
+}
+
+const PageLink *PageView::linkAt(const QPoint &viewportPoint) {
+    if (!m_doc || m_layout.isEmpty()) {
+        return nullptr;
+    }
+    const QPoint origin = contentOrigin();
+    for (int page = 0; page < m_layout.size(); ++page) {
+        const QRect box = m_layout.at(page).translated(origin);
+        if (!box.contains(viewportPoint)) {
+            continue;
+        }
+        for (const PageLink &link : linksOf(page)) {
+            if (fromPageSpace(page, link.area).translated(origin).contains(viewportPoint)) {
+                return &link;
+            }
+        }
+        return nullptr;
+    }
+    return nullptr;
+}
+
 void PageView::mousePressEvent(QMouseEvent *event) {
     if (event->button() == Qt::LeftButton && noticeRect().contains(event->position().toPoint())) {
         Q_EMIT noticeClicked();
         event->accept();
         return;
+    }
+    if (event->button() == Qt::LeftButton) {
+        if (const PageLink *link = linkAt(event->position().toPoint())) {
+            m_peekPage = link->page;
+            m_peekOrigin = event->position().toPoint();
+            m_peekTimer->start(kPeekHoldMs);
+            event->accept();
+            return;
+        }
     }
     if (event->button() == Qt::LeftButton && !m_layout.isEmpty()) {
         const Position position = positionAt(event->position().toPoint());
@@ -276,7 +341,6 @@ void PageView::mousePressEvent(QMouseEvent *event) {
     }
     QAbstractScrollArea::mousePressEvent(event);
 }
-
 
 // --- Coordinate mapping ----------------------------------------------------
 //
@@ -405,8 +469,7 @@ QString PageView::selectedText() const {
             if (!text.isEmpty()) {
                 // A new page, or a box that starts below the previous line,
                 // ends the line.
-                const bool newLine =
-                    page != previousPage || word.box.top() >= previousBottom;
+                const bool newLine = page != previousPage || word.box.top() >= previousBottom;
                 text += newLine ? QLatin1Char('\n') : QLatin1Char(' ');
             }
             text += word.text;
@@ -545,6 +608,11 @@ void PageView::paintSearchHits(QPainter &painter, int page, const QPoint &origin
 // --- Mouse -----------------------------------------------------------------
 
 void PageView::mouseMoveEvent(QMouseEvent *event) {
+    if (m_peekTimer->isActive() &&
+        (event->position().toPoint() - m_peekOrigin).manhattanLength() > kPeekSlopPx) {
+        m_peekTimer->stop();
+        m_peekPage = -1;
+    }
     if (!m_dragging) {
         QAbstractScrollArea::mouseMoveEvent(event);
         return;
@@ -558,6 +626,16 @@ void PageView::mouseMoveEvent(QMouseEvent *event) {
 }
 
 void PageView::mouseReleaseEvent(QMouseEvent *event) {
+    if (m_peekTimer->isActive() || m_peeking) {
+        m_peekTimer->stop();
+        if (m_peeking) {
+            m_peeking = false;
+            Q_EMIT linkPeekEnded();
+        }
+        m_peekPage = -1;
+        event->accept();
+        return;
+    }
     if (m_dragging && event->button() == Qt::LeftButton) {
         m_dragging = false;
         event->accept();
@@ -771,6 +849,7 @@ void PageView::applyScale(double factor, Poppler::Page::Rotation rotation) {
         // Word boxes are in points and so survive a zoom, but not a rotation:
         // both the boxes and their reading order change with it.
         m_words.clear();
+        m_links.clear();
         clearSelection();
     }
     relayout();

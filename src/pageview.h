@@ -5,6 +5,7 @@
 #pragma once
 
 #include <QAbstractScrollArea>
+#include <QTimer>
 #include <QHash>
 #include <QImage>
 #include <QList>
@@ -14,6 +15,8 @@
 #include <QSizeF>
 #include <QString>
 #include <QVector>
+
+#include "document.h"
 
 #include <poppler-qt6.h>
 
@@ -79,6 +82,10 @@ public:
     /// Hits arrive one at a time while the worker walks the document, so they
     /// are appended rather than set in one go. Rects are in the unrotated page
     /// space and are rotated for painting.
+    /// The internal link under a viewport point, or nullptr. Cached per page
+    /// alongside the words, and dropped on rotation for the same reason.
+    const PageLink *linkAt(const QPoint &viewportPoint);
+
     void addSearchHit(int page, const QRectF &rect);
     void clearSearchHits();
     int searchHitCount() const { return m_hits.size(); }
@@ -96,6 +103,11 @@ Q_SIGNALS:
     void pageChanged(int index);
     void noticeClicked();
     void searchHitsChanged(int count, int current);
+    /// The reader has held the pointer down on an internal link long enough to
+    /// mean it. Carries the destination page, zero-based.
+    void linkPeekRequested(int page);
+    /// They let go.
+    void linkPeekEnded();
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -135,6 +147,7 @@ private:
     };
 
     const QVector<Word> &wordsOf(int page);
+    const QVector<PageLink> &linksOf(int page);
     /// The word nearest a viewport point, for anchoring and extending a drag.
     Position positionAt(const QPoint &viewportPoint);
     /// Page-space point, in points, for a viewport point on the given page.
@@ -195,6 +208,18 @@ private:
     /// Word boxes per page. Unlike the render cache these do not depend on
     /// zoom, so they survive a zoom change and are dropped only on rotation.
     QHash<int, QVector<Word>> m_words;
+
+    /// Link areas per page, on the same terms as the words: points, current
+    /// orientation, so they survive a zoom and are dropped on a rotation.
+    QHash<int, QVector<PageLink>> m_links;
+
+    /// Hold-to-peek. A press on a link starts the timer instead of a
+    /// selection; the peek is only asked for once the reader has held it long
+    /// enough to have meant it, and is ended by the release.
+    QTimer *m_peekTimer = nullptr;
+    int m_peekPage = -1;
+    QPoint m_peekOrigin;
+    bool m_peeking = false;
 
     Position m_selectionAnchor;
     Position m_selectionCursor;

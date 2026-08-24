@@ -36,6 +36,7 @@
 #include <QProgressBar>
 #include <QPushButton>
 #include <QGridLayout>
+#include <QListWidget>
 #include <QStyleOptionToolButton>
 #include <QStylePainter>
 #include <QThread>
@@ -213,6 +214,12 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     connect(m_view, &PageView::noticeClicked, this, &MainWindow::reloadDocument);
     connect(m_view, &PageView::pageChanged, this, &MainWindow::onPageChanged);
     connect(m_view, &PageView::searchHitsChanged, this, [this](int, int) { updateSearchStatus(); });
+    connect(m_view, &PageView::linkPeekRequested, this, &MainWindow::peekPage);
+    connect(m_view, &PageView::linkPeekEnded, this, [this] {
+        if (m_overlay) {
+            m_overlay->dismiss();
+        }
+    });
 
     loadRecent();
     buildToolBar();
@@ -348,6 +355,11 @@ void MainWindow::buildToolBar() {
     // Return would swallow Enter in the page counter and the search field.
     // They are handled where focus actually is — in the page view's key
     // handler and in the search field's event filter.
+
+    auto *outlineAction = new QAction(this);
+    outlineAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+T")));
+    connect(outlineAction, &QAction::triggered, this, &MainWindow::showOutline);
+    addAction(outlineAction);
 
     auto *propertiesAction = new QAction(this);
     propertiesAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+I")));
@@ -651,6 +663,110 @@ void MainWindow::watchDocument(const QString &path) {
 }
 
 // --- Printing --------------------------------------------------------------
+
+void MainWindow::showOutline() {
+    if (!m_doc || !m_doc->isOpen()) {
+        return;
+    }
+
+    const QVector<OutlineEntry> entries = m_doc->outline();
+
+    if (entries.isEmpty()) {
+        // Saying so beats opening an empty box: plenty of documents simply have
+        // no table of contents, and that is not a failure.
+        auto *empty = new QLabel(tr("This document has no table of contents."));
+        empty->setWordWrap(true);
+        m_overlay->present(tr("Outline"), empty);
+        return;
+    }
+
+    auto *list = new QListWidget;
+    list->setFrameShape(QFrame::NoFrame);
+    list->setSelectionMode(QAbstractItemView::SingleSelection);
+    // The overlay already scrolls. A list that scrolls inside a surface that
+    // scrolls gives the reader two wheels for one list, so this one is sized to
+    // its contents below and never grows bars of its own.
+    list->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    list->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    // The panel paints the background; a view filled with Base draws a second,
+    // paler rectangle on top of it.
+    list->setAutoFillBackground(false);
+    list->viewport()->setAutoFillBackground(false);
+    list->setBackgroundRole(QPalette::NoRole);
+    list->viewport()->setBackgroundRole(QPalette::NoRole);
+
+    for (const OutlineEntry &entry : entries) {
+        // Indentation carries the nesting: a transient list a reader arrows
+        // through does not want branches to be expanded first.
+        auto *item =
+            new QListWidgetItem(QString(entry.depth * 4, QLatin1Char(' ')) + entry.title, list);
+        item->setData(Qt::UserRole, entry.page);
+        if (entry.page < 0) {
+            // Points at another file or a URL. Listed, and inert.
+            item->setFlags(item->flags() & ~Qt::ItemIsEnabled);
+        }
+    }
+
+    // Sized to every row, since it will not scroll itself.
+    int rows = 0;
+    for (int i = 0; i < list->count(); ++i) {
+        rows += list->sizeHintForRow(i);
+    }
+    list->setFixedHeight(rows + 2);
+    list->setMinimumWidth(list->sizeHintForColumn(0) + 2);
+
+    const auto jump = [this](QListWidgetItem *item) {
+        const int page = item->data(Qt::UserRole).toInt();
+        if (page < 0) {
+            return;
+        }
+        m_view->scrollToPage(page);
+        m_overlay->dismiss();
+    };
+    connect(list, &QListWidget::itemActivated, this, jump);
+    connect(list, &QListWidget::itemClicked, this, jump);
+
+    // Land on the section the reader is already in, so Enter alone is a
+    // sensible thing to press.
+    const int current = m_view->currentPage();
+    int best = -1;
+    for (int i = 0; i < entries.size(); ++i) {
+        const int page = entries.at(i).page;
+        if (page >= 0 && page <= current) {
+            best = i;
+        }
+    }
+    if (best >= 0) {
+        list->setCurrentRow(best);
+    }
+
+    m_overlay->present(tr("Outline"), list);
+    list->setFocus(Qt::OtherFocusReason);
+}
+
+void MainWindow::peekPage(int page) {
+    if (!m_doc || !m_doc->isOpen() || page < 0 || page >= m_doc->pageCount()) {
+        return;
+    }
+
+    // Sized against the window rather than the page: a peek is a glance, and
+    // the reader is still holding the mouse down.
+    const QSizeF size = m_doc->pageSize(page);
+    if (!size.isValid() || size.height() <= 0) {
+        return;
+    }
+    const double target = height() * 0.45;
+    const QImage image = m_doc->renderPage(page, target / size.height(), m_view->rotation());
+    if (image.isNull()) {
+        return;
+    }
+
+    auto *label = new QLabel;
+    label->setPixmap(QPixmap::fromImage(image));
+    label->setAlignment(Qt::AlignCenter);
+
+    m_overlay->present(tr("Page %1").arg(page + 1), label);
+}
 
 void MainWindow::showProperties() {
     if (!m_doc || !m_doc->isOpen()) {

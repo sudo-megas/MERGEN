@@ -5,6 +5,8 @@
 #include "document.h"
 
 #include <QDateTime>
+#include <poppler-link.h>
+
 #include <QFileInfo>
 #include <QLocale>
 #include <utility>
@@ -103,6 +105,82 @@ void Document::close() {
 
 int Document::pageCount() const {
     return m_doc ? m_doc->numPages() : 0;
+}
+
+namespace {
+
+/// Walks poppler's outline tree depth-first into a flat list.
+void flattenOutline(const QVector<Poppler::OutlineItem> &items, int depth,
+                    QVector<OutlineEntry> &out) {
+    for (const Poppler::OutlineItem &item : items) {
+        if (item.isNull()) {
+            continue;
+        }
+        OutlineEntry entry;
+        entry.title = item.name().simplified();
+        entry.depth = depth;
+
+        // An entry pointing into another file, or at a URL, is listed and does
+        // nothing: MERGEN opens neither.
+        if (item.externalFileName().isEmpty() && item.uri().isEmpty()) {
+            if (const QSharedPointer<const Poppler::LinkDestination> dest = item.destination()) {
+                // poppler counts pages from one here; everything else in MERGEN
+                // counts from zero.
+                entry.page = dest->pageNumber() - 1;
+            }
+        }
+        out.append(entry);
+
+        if (item.hasChildren()) {
+            flattenOutline(item.children(), depth + 1, out);
+        }
+    }
+}
+
+} // namespace
+
+QVector<OutlineEntry> Document::outline() const {
+    QVector<OutlineEntry> out;
+    if (!m_doc) {
+        return out;
+    }
+    flattenOutline(m_doc->outline(), 0, out);
+    return out;
+}
+
+QVector<PageLink> Document::pageLinks(int index, Poppler::Page::Rotation rotation) const {
+    QVector<PageLink> out;
+    if (!m_doc || index < 0 || index >= m_doc->numPages()) {
+        return out;
+    }
+    const std::unique_ptr<Poppler::Page> page = m_doc->page(index);
+    if (!page) {
+        return out;
+    }
+
+    const QSizeF size = page->pageSizeF();
+    for (const std::unique_ptr<Poppler::Link> &link : page->links()) {
+        if (!link || link->linkType() != Poppler::Link::Goto) {
+            continue;
+        }
+        const auto *jump = static_cast<const Poppler::LinkGoto *>(link.get());
+        if (jump->isExternal()) {
+            continue;
+        }
+        const int target = jump->destination().pageNumber() - 1;
+        if (target < 0 || target >= m_doc->numPages()) {
+            continue;
+        }
+
+        // linkArea is fractional, and poppler hands back rects whose corners
+        // are not always in the order a QRectF expects.
+        const QRectF fraction = link->linkArea().normalized();
+        const QRectF points(fraction.x() * size.width(), fraction.y() * size.height(),
+                            fraction.width() * size.width(), fraction.height() * size.height());
+
+        out.append({rotateRect(points, size, rotation), target});
+    }
+    return out;
 }
 
 DocumentProperties Document::properties() const {

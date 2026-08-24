@@ -70,6 +70,10 @@ private:
 
     // Actions.
     void showProperties();
+    void showOutline();
+    /// Renders one page into the overlay without going there. The reader is
+    /// holding a link down; letting go puts everything back.
+    void peekPage(int page);
     void printDocument();
     void showAbout();
     void chooseFile();

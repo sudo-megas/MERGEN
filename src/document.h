@@ -46,6 +46,25 @@ struct DocumentProperties {
     QStringList warnings;
 };
 
+/// One entry of the document's own table of contents, flattened depth-first
+/// with its depth kept so the overlay can indent it. A transient list a reader
+/// arrows through wants indentation, not a tree to expand — MZ.md \ref 6.
+struct OutlineEntry {
+    QString title;
+    int depth = 0;
+    /// Zero-based, or -1 for an entry that points somewhere MERGEN will not
+    /// follow: another file, or a URL. Those are shown, and do nothing.
+    int page = -1;
+};
+
+/// An internal link and where it goes, for hold-to-peek.
+struct PageLink {
+    /// In points, in the rotated page space, ready for fromPageSpace().
+    QRectF area;
+    /// Zero-based destination page.
+    int page = -1;
+};
+
 /// Why a load attempt did not produce a usable document.
 enum class LoadStatus {
     Ok,
@@ -93,6 +112,15 @@ public:
     /// \ref DocumentProperties. Gathered on demand, never at open time: it
     /// walks the font table, which is work no reader asked for until they ask.
     DocumentProperties properties() const;
+
+    /// The document's table of contents, flattened. Empty when it has none,
+    /// which many documents genuinely do.
+    QVector<OutlineEntry> outline() const;
+
+    /// Internal links on one page, in the orientation asked for. Only links
+    /// that go to another page of this same document: an external file or a
+    /// URL is not something MERGEN opens — MZ.md \ref 5.
+    QVector<PageLink> pageLinks(int index, Poppler::Page::Rotation rotation) const;
 
     /// Page size in points (1/72 inch), before rotation is applied.
     QSizeF pageSize(int index) const;
