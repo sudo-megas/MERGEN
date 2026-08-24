@@ -28,7 +28,17 @@ else echo "clean"; fi
 
 echo "== authors AND committers, name and email =="
 # %cn/%ce as well as %an/%ae: a committer trailer is attribution too.
-if git log --format='%an <%ae>%n%cn <%ce>' | sort -u | grep -viE '^sudo-megas <'; then
+#
+# GitHub <noreply@github.com> is allowed as a COMMITTER only. Editing a file
+# through github.com stamps the platform as committer while the author stays the
+# person who made the edit, and refusing that would mean the web editor could
+# never be used. It is the platform doing what it was asked, not a tool taking
+# credit — which is what §5 is about. The author is still checked, so a commit
+# whose *author* is anything but sudo-megas still fails.
+if git log --format='%an <%ae>' | sort -u | grep -viE '^sudo-megas <'; then
+    echo "FAIL: a commit authored by another identity"; status=1
+elif git log --format='%cn <%ce>' | sort -u \
+     | grep -viE '^(sudo-megas|GitHub <noreply@github\.com>)'; then
     echo "FAIL: a commit from another identity"; status=1
 else echo "clean"; fi
 
