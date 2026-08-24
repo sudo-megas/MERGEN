@@ -522,6 +522,11 @@ void MainWindow::openPath(const QString &path) {
     m_opening = true;
     const QScopeGuard done([this] { m_opening = false; });
 
+    // A comparison belongs to the pair that started it. Opening anything else
+    // — by dialog, drop, socket, recent list or portal — ends it, rather than
+    // leaving two unrelated documents side by side with the old marks on them.
+    leaveCompare();
+
     const QFileInfo info(path);
     const QString name = info.fileName();
 
@@ -580,6 +585,8 @@ void MainWindow::closeDocument(const QString &message) {
     if (m_overlay) {
         m_overlay->dismiss();
     }
+    leaveCompare();
+    closeSearch();
     m_doc->close();
     m_view->setDocument(nullptr);
     m_view->setNotice(QString());

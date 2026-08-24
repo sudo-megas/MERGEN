@@ -110,6 +110,12 @@ PageView::PageView(QWidget *parent) : QAbstractScrollArea(parent) {
 }
 
 void PageView::setDocument(Document *doc) {
+    // Everything below belongs to the document being replaced. Four separate
+    // symptoms in the audit were four things this forgot: stale compare marks
+    // painted over an unrelated document, a jump still animating that dragged
+    // the new one to the old offset, and presentation silently degrading.
+    stopScrollAnimations();
+    m_diffBands.clear();
     m_doc = doc;
     m_message.clear();
     m_cache.clear();
@@ -120,7 +126,10 @@ void PageView::setDocument(Document *doc) {
     m_selectionAnchor = Position();
     m_selectionCursor = Position();
     m_zoom = 1.0;
-    m_zoomMode = ZoomMode::FitWidth;
+    // Presenting is the window's mode, not the document's: a new document
+    // opened while presenting stays fitted to the page rather than dropping
+    // back to a scrolling column behind a hidden toolbar.
+    m_zoomMode = m_presenting ? ZoomMode::FitPage : ZoomMode::FitWidth;
     m_rotation = Poppler::Page::Rotate0;
 
     // Page geometry is fixed for the life of the document; ask poppler once.
@@ -389,14 +398,29 @@ void PageView::paintDiffBands(QPainter &painter, int page, const QPoint &origin)
     if (found == m_diffBands.constEnd()) {
         return;
     }
-    const QRect box = m_layout.at(page).translated(origin);
+    if (!m_doc) {
+        return;
+    }
+    // Bands are measured against an unrotated render, so they are turned into
+    // the current orientation at paint time — the same way search hits are, and
+    // for the same reason. Painting them straight into the laid-out rectangle
+    // put a wide stripe where a tall one belonged at 90 and 270 degrees, and
+    // the wrong half of the page at 180.
+    const QSizeF size = m_doc->pageSize(page);
+    if (!size.isValid()) {
+        return;
+    }
     // The same derived contrast colour the search already uses: one derived
     // value in the palette, not two — MZ.md §6.
     for (const auto &band : found.value()) {
-        const int top = box.top() + qRound(band.first * box.height());
-        const int bottom = box.top() + qRound(band.second * box.height());
-        painter.fillRect(QRect(box.left(), top, box.width(), qMax(2, bottom - top)),
-                         searchColor(64));
+        const QRectF unrotated(0.0, band.first * size.height(), size.width(),
+                               qMax(band.second - band.first, 0.0) * size.height());
+        QRect box = fromPageSpace(page, Document::rotateRect(unrotated, size, m_rotation))
+                        .translated(origin);
+        if (box.height() < 2) {
+            box.setHeight(2);
+        }
+        painter.fillRect(box, searchColor(64));
     }
 }
 

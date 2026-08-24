@@ -143,7 +143,7 @@ void Document::close() {
 }
 
 int Document::pageCount() const {
-    return m_doc ? m_doc->numPages() : 0;
+    return isOpen() ? m_doc->numPages() : 0;
 }
 
 namespace {
@@ -180,7 +180,7 @@ void flattenOutline(const QVector<Poppler::OutlineItem> &items, int depth,
 
 QVector<OutlineEntry> Document::outline() const {
     QVector<OutlineEntry> out;
-    if (!m_doc) {
+    if (!isOpen()) {
         return out;
     }
     flattenOutline(m_doc->outline(), 0, out);
@@ -189,7 +189,7 @@ QVector<OutlineEntry> Document::outline() const {
 
 QVector<PageLink> Document::pageLinks(int index, Poppler::Page::Rotation rotation) const {
     QVector<PageLink> out;
-    if (!m_doc || index < 0 || index >= m_doc->numPages()) {
+    if (!isOpen() || index < 0 || index >= m_doc->numPages()) {
         return out;
     }
     const std::unique_ptr<Poppler::Page> page = m_doc->page(index);
@@ -245,7 +245,7 @@ QString Document::contentHash() const {
 
 DocumentProperties Document::properties() const {
     DocumentProperties out;
-    if (!m_doc) {
+    if (!isOpen()) {
         return out;
     }
 
@@ -371,7 +371,7 @@ DocumentProperties Document::properties() const {
 }
 
 QSizeF Document::pageSize(int index) const {
-    if (!m_doc || index < 0 || index >= m_doc->numPages()) {
+    if (!isOpen() || index < 0 || index >= m_doc->numPages()) {
         return QSizeF();
     }
     const auto page = m_doc->page(index);
@@ -384,7 +384,7 @@ QImage Document::renderPage(int index, double scale, Poppler::Page::Rotation rot
     // render — a printed sheet of solid black, a 1x1 cached as the page, two
     // different documents compared as identical. Caught here, once, so those
     // checks start meaning what they say — MZ.md §9.
-    if (!m_doc || index < 0 || index >= m_doc->numPages() || scale <= 0.0) {
+    if (!isOpen() || index < 0 || index >= m_doc->numPages() || scale <= 0.0) {
         return QImage();
     }
     const auto page = m_doc->page(index);
@@ -418,7 +418,7 @@ QImage Document::renderPage(int index, double scale, Poppler::Page::Rotation rot
 
 QVector<Word> Document::words(int index, Poppler::Page::Rotation rotation) const {
     QVector<Word> result;
-    if (!m_doc || index < 0 || index >= m_doc->numPages()) {
+    if (!isOpen() || index < 0 || index >= m_doc->numPages()) {
         return result;
     }
     const auto page = m_doc->page(index);
@@ -434,7 +434,7 @@ QVector<Word> Document::words(int index, Poppler::Page::Rotation rotation) const
 }
 
 QList<QRectF> Document::search(int index, const QString &needle) const {
-    if (!m_doc || index < 0 || index >= m_doc->numPages() || needle.isEmpty()) {
+    if (!isOpen() || index < 0 || index >= m_doc->numPages() || needle.isEmpty()) {
         return {};
     }
     const auto page = m_doc->page(index);
