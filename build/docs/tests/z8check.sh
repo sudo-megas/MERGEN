@@ -1,7 +1,19 @@
 set -u
 MERGEN=${MERGEN:-$PWD/build/mergen}
 export QT_QPA_PLATFORM=offscreen
-SOCK="${XDG_RUNTIME_DIR:-/tmp}/mergen-$(id -u).sock"
+# Set, not guessed. Control::socketPath asks Qt for the runtime location, and
+# when XDG_RUNTIME_DIR is unset Qt does NOT fall back to /tmp — it makes and uses
+# /tmp/runtime-$USER. This script guessed /tmp, so the two disagreed on any
+# machine without the variable set, and every check here failed with NOSOCKET
+# while the instance was running perfectly well a directory away. That is every
+# container; a desktop session always has it, which is why it never showed up by
+# hand. Exporting it before the instance is launched makes both sides agree by
+# construction rather than by coincidence.
+if [ -z "${XDG_RUNTIME_DIR:-}" ]; then
+    XDG_RUNTIME_DIR=$(mktemp -d)
+    export XDG_RUNTIME_DIR
+fi
+SOCK="$XDG_RUNTIME_DIR/mergen-$(id -u).sock"
 fails=0
 chk() { if [ "$1" = "1" ]; then printf "  PASS  %s\n" "$2"; else printf "  FAIL  %s\n" "$2"; fails=$((fails+1)); fi; }
 
