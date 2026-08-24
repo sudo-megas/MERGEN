@@ -72,6 +72,29 @@ struct PageLink {
     int page = -1;
 };
 
+/// What the filesystem will say about a path, for the callers whose answer
+/// decides whether an entry is dropped, greyed out or refused.
+///
+/// QFileInfo::exists() cannot answer this. It reports stat()'s success and
+/// nothing else, so "there is no such file" and "a directory on the way is
+/// closed to this account" come back identically false — which is how the
+/// elevation path came to be unreachable by the very files it was built for.
+enum class Presence {
+    /// stat() succeeded. Whether it can be *read* is a separate question, and
+    /// one only openPath() is in a position to answer.
+    Present,
+    /// The name does not resolve to anything. Safe to drop.
+    Absent,
+    /// It may well be there; this account is not permitted to look. Never to be
+    /// reported, or acted on, as an absence.
+    Unreadable,
+};
+
+/// stat(), with errno kept rather than discarded. Anything short of a definite
+/// absence is Unreadable, because "I could not look" must not be passed off as
+/// "it is not there" — MZ.md §13.
+Presence presenceOf(const QString &path);
+
 /// Why a load attempt did not produce a usable document.
 enum class LoadStatus {
     Ok,

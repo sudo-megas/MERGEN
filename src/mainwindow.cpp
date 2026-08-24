@@ -1458,7 +1458,10 @@ void MainWindow::followPortal() {
             m_view->scrollToPage(to->page);
             return;
         }
-        if (!QFileInfo::exists(to->path)) {
+        // Absent, not merely closed to this account: those are different
+        // answers and only the first is a reason to stop. A portal whose far
+        // end is root-owned goes on to openPath, which offers to authenticate.
+        if (presenceOf(to->path) == Presence::Absent) {
             // Kept, not deleted: the file may simply not be mounted today.
             m_view->setNotice(tr("The other end of this portal is in %1, which is not there.")
                                   .arg(QFileInfo(to->path).fileName()));
@@ -1566,8 +1569,16 @@ void MainWindow::showPortals() {
         const QString path = item->data(Qt::UserRole).toString();
         const int page = item->data(Qt::UserRole + 1).toInt();
         m_overlay->dismiss();
-        if (QFileInfo::exists(path)) {
-            openPath(path);
+        // Absent is refused; unreadable is opened, through pkexec, the way the
+        // portal was made in the first place. Saying so beats the older silence,
+        // which dismissed the overlay and then did nothing at all.
+        if (presenceOf(path) == Presence::Absent) {
+            m_view->setNotice(tr("%1 is not there.").arg(QFileInfo(path).fileName()));
+            return;
+        }
+        openPath(path);
+        // Only if it actually opened: a failed open leaves no document to scroll.
+        if (m_doc->isOpen()) {
             m_view->scrollToPage(page);
         }
     };
@@ -2640,8 +2651,13 @@ void MainWindow::pushRecent(const QString &path) {
     m_recent.prepend(path);
 
     // Paths that have gone away are dropped the next time the file is written.
+    // Gone away, precisely: a document this account may not look at has not gone
+    // anywhere. QFileInfo::exists() could not tell the two apart, so every
+    // root-owned document quietly deleted itself from the reader's own history
+    // on the next open — the files the elevation path exists for were the only
+    // ones that could never stay in it.
     for (int i = m_recent.size() - 1; i > 0; --i) {
-        if (!QFileInfo::exists(m_recent.at(i))) {
+        if (presenceOf(m_recent.at(i)) == Presence::Absent) {
             m_recent.removeAt(i);
         }
     }
@@ -2669,7 +2685,10 @@ void MainWindow::rebuildRecentMenu() {
         QAction *entry = m_recentMenu->addAction(QFileInfo(path).fileName());
         entry->setToolTip(path);
         // Greyed, but still listed: it was recent, it is simply not there now.
-        entry->setEnabled(QFileInfo::exists(path));
+        // Unreadable is not that, and must stay live — choosing it goes through
+        // pkexec exactly as the first open did. Greying it out offered the
+        // reader no way back to a document they had already authenticated for.
+        entry->setEnabled(presenceOf(path) != Presence::Absent);
         connect(entry, &QAction::triggered, this, [this, path] { openPath(path); });
     }
 }

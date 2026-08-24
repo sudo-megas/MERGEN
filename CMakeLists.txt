@@ -5,7 +5,7 @@
 cmake_minimum_required(VERSION 3.25)
 
 project(mergen
-    VERSION 2.0.3
+    VERSION 2.0.4
     DESCRIPTION "A minimal PDF viewer"
     HOMEPAGE_URL "https://github.com/sudo-megas/MERGEN"
     LANGUAGES CXX)
@@ -32,7 +32,7 @@ pkg_check_modules(QPDF REQUIRED IMPORTED_TARGET libqpdf)
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE" MERGEN_LICENSE_TEXT)
 configure_file(src/license.h.in ${CMAKE_CURRENT_BINARY_DIR}/license.h @ONLY)
 
-set(MERGEN_RELEASE_DATE "2026-08-24" CACHE STRING "Date shown in the About dialog")
+set(MERGEN_RELEASE_DATE "2026-08-25" CACHE STRING "Date shown in the About dialog")
 
 # The privileged reader lives beside the binary, not on PATH, and is never
 # installed setuid: polkit decides, not the filesystem.

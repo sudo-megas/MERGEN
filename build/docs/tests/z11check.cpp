@@ -307,6 +307,98 @@ int main(int argc, char **argv) {
               "a missing document is still NotFound");
     }
 
+    std::printf("\n--- presenceOf() separates the three answers ---\n");
+    {
+        check(presenceOf(QStringLiteral("test.pdf")) == Presence::Present,
+              "an ordinary document is Present");
+        check(presenceOf(QStringLiteral("no-such-document.pdf")) == Presence::Absent,
+              "a missing document is Absent");
+
+        QTemporaryDir shed;
+        const QString hidden = shed.path() + QStringLiteral("/inside.pdf");
+        QFile::copy(QStringLiteral("test.pdf"), hidden);
+        QFile::setPermissions(shed.path(), QFile::ReadOwner | QFile::WriteOwner);
+        check(presenceOf(hidden) == Presence::Unreadable,
+              "a document behind a closed directory is Unreadable, NOT Absent");
+        // A name below a plain file is ENOTDIR, which no privilege would fix.
+        check(presenceOf(QStringLiteral("test.pdf/below")) == Presence::Absent,
+              "a path under a non-directory is Absent");
+        QFile::setPermissions(shed.path(),
+                              QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner);
+    }
+
+    std::printf("\n--- the recent list keeps what it may not look at ---\n");
+    {
+        // The other half of the same defect. 2.0.2 got the elevation path
+        // reachable; the recent list went on asking QFileInfo::exists(), so a
+        // root-owned document was pruned from the reader's own history on the
+        // next open and greyed out in the menu before that — no way back to a
+        // document they had already authenticated for.
+        QTemporaryDir state;
+        check(state.isValid(), "temporary state directory");
+        qputenv("XDG_STATE_HOME", state.path().toLocal8Bit());
+
+        QTemporaryDir shed;
+        const QString hidden = shed.path() + QStringLiteral("/private.pdf");
+        QFile::copy(QStringLiteral("test.pdf"), hidden);
+
+        // In a directory that stays traversable, or it would be unreadable
+        // rather than absent and the check would prove nothing.
+        QTemporaryDir open;
+        const QString gone = open.path() + QStringLiteral("/deleted.pdf");
+        QFile::copy(QStringLiteral("test.pdf"), gone);
+        QFile::remove(gone);
+        check(presenceOf(gone) == Presence::Absent, "the deleted one really is Absent");
+
+        // Seeded rather than opened: getting an unreadable path into the list
+        // the honest way needs pkexec, and the pruning is what is under test.
+        QDir().mkpath(state.path() + QStringLiteral("/mergen"));
+        QFile toml(state.path() + QStringLiteral("/mergen/recent.toml"));
+        check(toml.open(QIODevice::WriteOnly | QIODevice::Text), "seeded recent.toml");
+        toml.write(QStringLiteral("recent = [\n    \"%1\",\n    \"%2\",\n]\n")
+                       .arg(hidden, gone).toUtf8());
+        toml.close();
+
+        QFile::setPermissions(shed.path(), QFile::ReadOwner | QFile::WriteOwner);
+
+        MainWindow w;                                  // loadRecent() reads the seed
+        w.openPath(QStringLiteral("test.pdf"));        // and pushRecent() prunes
+        settle();
+
+        // The menu whose entries carry full paths as tooltips is the recent one.
+        QMenu *recent = nullptr;
+        for (QMenu *m : w.findChildren<QMenu *>()) {
+            for (QAction *a : m->actions()) {
+                if (a->toolTip().endsWith(QStringLiteral("test.pdf"))) {
+                    recent = m;
+                }
+            }
+        }
+        check(recent != nullptr, "found the recent menu");
+
+        bool listedHidden = false, enabledHidden = false, listedGone = false;
+        if (recent) {
+            for (QAction *a : recent->actions()) {
+                if (a->toolTip() == hidden) {
+                    listedHidden = true;
+                    enabledHidden = a->isEnabled();
+                }
+                if (a->toolTip() == gone) {
+                    listedGone = true;
+                }
+            }
+            std::printf("      menu holds %d entr%s\n", int(recent->actions().size()),
+                        recent->actions().size() == 1 ? "y" : "ies");
+        }
+        check(listedHidden, "the unreadable document is still in the recent list");
+        check(enabledHidden, "and is still choosable, so pkexec can be asked again");
+        check(!listedGone, "while a genuinely deleted one is dropped");
+
+        QFile::setPermissions(shed.path(),
+                              QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner);
+        qunsetenv("XDG_STATE_HOME");
+    }
+
     std::printf(fails ? "\n%d CHECK(S) FAILED\n" : "\nALL CHECKS PASSED\n", fails);
     return fails;
 }

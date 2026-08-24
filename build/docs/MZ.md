@@ -1053,6 +1053,36 @@ Nothing is built toward any of them before the ruling.
 > suites had all passed over it — none of them ever ran the real binary against
 > a file it genuinely could not stat.
 
+> [!NOTE]
+> **Amended at 2.0.4.** 2.0.2 fixed the question where it was first asked and
+> left it wrong in four other places, because the fix was written into
+> `openPath` rather than into a thing the rest of the program could use. The
+> recent list went on asking `QFileInfo::exists()`, and so did both portal
+> paths.
+>
+> The result was worse than the original bug rather than smaller. A root-owned
+> document opened fine, was added to the reader's history, and was then deleted
+> from it by the *next* open — `pushRecent` prunes every entry it believes has
+> gone away, and it believed that of the only files the elevation path exists
+> for. Before that pruning it was already greyed out and unchoosable in the
+> dropdown, so a reader who had authenticated for a document had no way back to
+> it but to type the path again. A portal into one reported "the other end is
+> in X, which is not there", about a file that was.
+>
+> The distinction is now a type — `Presence`, of `Present`, `Absent` and
+> `Unreadable` — and `presenceOf()` is the single place `errno` is read.
+> `openPath` consumes it like everyone else, so the rule cannot be fixed in one
+> caller and left broken in the next. Anything short of a definite absence is
+> `Unreadable`: a failure to look is not a finding, and an `EIO` must not delete
+> a reader's history any more than an `EACCES` may.
+>
+> The regression is `z11check`, which seeds `recent.toml` with an unreadable
+> path and an absent one and requires the list to keep the first and drop the
+> second. It was run against the unfixed code first and failed there, which is
+> the only evidence that a passing test is worth anything. Then the same thing
+> end to end against the real binary — the lesson from 2.0.2, applied rather
+> than recorded.
+
 **Where an elevated document may go.** A file the reader could only open by
 authenticating to `pkexec` is in memory as plaintext that their own account has
 no right to. Three ways out of the process were considered at Z11, and they are
@@ -1075,6 +1105,28 @@ not ruled the same way:
 
 If that trade is ever revisited, the thing to change is the clipboard, not the
 other two.
+
+**Whether a comparison may authenticate.** Found at 2.0.4 and deliberately not
+built. `enterCompare` calls `Document::openPath` directly and stops at whatever
+it returns, so a root-owned document cannot be the far side of a comparison —
+the main window offers to authenticate for it and the comparison does not, which
+is a difference the reader has no way to explain.
+
+The reading is defensible on its own terms: a comparison puts a document on
+screen and nowhere else, which is what §13 already permits above. But it is not
+a patch, and it is written here rather than done for two reasons. The first is
+that `m_compareDoc` would then hold elevated plaintext, and both guards that
+keep such plaintext off disk — redaction and print-to-file — test `m_doc->data()`
+only, so each would need to consider the second document or be quietly wrong for
+it. The second is that the practical route in is the file dialog, which cannot
+list a directory it cannot traverse; the gap is real but nearly unreachable, and
+that is an argument for ruling on it rather than for reaching for it in a
+point release.
+
+What it needs, if ruled yes: the `NoPermission` branch from `MainWindow::openPath`
+repeated for the comparison document, both plaintext guards widened to whichever
+document is elevated, and `leaveCompare` wiping the second buffer the way
+`close()` wipes the first.
 
 **An opt-out for motion.** Motion is unconditional because Qt offers nothing on
 this platform to condition it on — see the amendment in §9. A reader who wants

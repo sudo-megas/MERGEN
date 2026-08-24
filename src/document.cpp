@@ -58,7 +58,38 @@ namespace {
 /// allocations near 2^31 and starts returning 1x1 instead of failing, so the
 /// limit is drawn just below that where a refusal is still a refusal.
 constexpr long long kMaxRenderBytes = 1536LL * 1024 * 1024;
+
+/// presenceOf(), keeping the stat buffer for the one caller that needs the mode
+/// bits as well as the verdict. Both go through here so the rule for reading
+/// errno exists once and the two cannot drift apart.
+Presence statPresence(const QString &path, struct stat *st) {
+    if (::stat(path.toLocal8Bit().constData(), st) == 0) {
+        return Presence::Present;
+    }
+    switch (errno) {
+    // The name does not resolve, and no privilege would change that: nothing of
+    // that name, a non-directory used as one, a symlink that leads nowhere, or a
+    // name too long for any filesystem to be holding.
+    case ENOENT:
+    case ENOTDIR:
+    case ELOOP:
+    case ENAMETOOLONG:
+        return Presence::Absent;
+    // EACCES — a directory on the way is closed to this account, which is the
+    // ordinary case for /root at mode 750 — and everything else besides. An
+    // unexpected errno is a failure to look, not a finding of absence, and is
+    // reported as the former: claiming a file is gone on the strength of an EIO
+    // is exactly the conflation this type exists to end.
+    default:
+        return Presence::Unreadable;
+    }
+}
 } // namespace
+
+Presence presenceOf(const QString &path) {
+    struct stat st{};
+    return statPresence(path, &st);
+}
 
 Document::Document() = default;
 Document::~Document() = default;
@@ -76,11 +107,13 @@ LoadStatus Document::openPath(const QString &path, const QByteArray &password) {
     // are not permitted to look, and only the second is a question pkexec can
     // answer.
     struct stat st{};
-    if (::stat(path.toLocal8Bit().constData(), &st) != 0) {
-        if (errno == EACCES) {
-            return LoadStatus::NoPermission;
-        }
+    switch (statPresence(path, &st)) {
+    case Presence::Absent:
         return LoadStatus::NotFound;
+    case Presence::Unreadable:
+        return LoadStatus::NoPermission;
+    case Presence::Present:
+        break;
     }
     if (!S_ISREG(st.st_mode)) {
         return LoadStatus::NotFound;
