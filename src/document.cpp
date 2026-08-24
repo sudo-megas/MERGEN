@@ -5,6 +5,7 @@
 #include "document.h"
 
 #include <QDateTime>
+#include <poppler-annotation.h>
 #include <poppler-link.h>
 
 #include <QFileInfo>
@@ -79,6 +80,11 @@ void Document::applyRenderHints() {
     m_doc->setRenderHint(Poppler::Document::Antialiasing, true);
     m_doc->setRenderHint(Poppler::Document::TextAntialiasing, true);
     m_doc->setRenderHint(Poppler::Document::TextSlightHinting, true);
+    // Poppler composites annotations into the page by default, so MERGEN has
+    // always drawn them — but by default rather than by decision, and a default
+    // can move. Reading a PDF faithfully includes reading what is written on
+    // it, so the intent is stated here rather than inherited — MZ.md §9.
+    m_doc->setRenderHint(Poppler::Document::HideAnnotations, false);
 }
 
 bool Document::unlock(const QByteArray &password) {
@@ -270,6 +276,27 @@ DocumentProperties Document::properties() const {
         row(QStringLiteral("Fonts"),
             QStringLiteral("%1 (%2 embedded)")
                 .arg(QString::number(fonts.size()), QString::number(embedded)));
+    }
+
+    // Markup someone else left. It is drawn either way; this says it is there,
+    // so a reader knows the yellow is not part of the document.
+    int marks = 0;
+    for (int i = 0; i < m_doc->numPages(); ++i) {
+        const std::unique_ptr<Poppler::Page> page = m_doc->page(i);
+        if (!page) {
+            continue;
+        }
+        for (const std::unique_ptr<Poppler::Annotation> &annot : page->annotations()) {
+            // Links are structure, not markup, and are never what a reader
+            // means when they ask whether a document has been annotated.
+            if (annot && annot->subType() != Poppler::Annotation::ALink &&
+                annot->subType() != Poppler::Annotation::AWidget) {
+                ++marks;
+            }
+        }
+    }
+    if (marks > 0) {
+        row(QStringLiteral("Annotations"), QString::number(marks));
     }
 
     // The part a viewer normally keeps to itself.

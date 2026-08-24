@@ -449,14 +449,27 @@ holding hue and saturation has a closed form: in HSL the chroma
 `255 - (max + min)` to every channel. It is its own inverse, so toggling twice
 returns the original image exactly.
 
-**Annotation rendering.** Poppler exposes a page's annotations, and MERGEN
-draws the ones that carry visual meaning — highlights, underlines, squiggles,
-strikeouts, text notes, ink, squares, circles, lines — in the geometry poppler
-reports, transformed for the current zoom and rotation the same way search
-hits already are. It does not draw what it cannot honestly present: no popup
-windows, no widget annotations, no embedded media. Annotation geometry is
-stored unrotated and transformed at paint time, following the rule search hits
-already established, so rotating a document does not invalidate it.
+**Annotation rendering.** Poppler composites annotations into the page inside
+`renderToImage()`, in the geometry and at the zoom and rotation it was asked
+for. MERGEN has therefore always drawn them.
+
+> [!NOTE]
+> **Amended at Z6.** This section first described a compositing layer in
+> MERGEN: read the annotations, transform their geometry, paint them over the
+> rendered page, keeping the rects unrotated the way search hits are. None of
+> that is needed, and it was written on an assumption that was never checked.
+> Poppler draws annotations itself unless asked not to, and measured against
+> `pdftoppm` on the same file MERGEN's output already matched it exactly —
+> highlight, underline and square all present, correct at 250% and rotated.
+> Building the layer would have duplicated poppler and risked drawing markup
+> twice.
+>
+> What was actually wrong is narrower and worth fixing: MERGEN drew
+> annotations *by default rather than by decision*. `HideAnnotations` is a
+> render hint poppler simply had switched off; nothing in MERGEN said it
+> wanted annotations, so a change of default would have silently taken them
+> away. The hint is now set explicitly. The behaviour is unchanged and the
+> intent is on the record.
 
 **Night mode.** Lightness is inverted; hue and saturation are left alone.
 Straight RGB inversion is one call and would have been cheaper, but it turns
@@ -610,13 +623,15 @@ git tag v1.5.0
 
 ### Z6 — Annotation rendering — `v1.6.0`
 
-1. Read a page's annotations through poppler; composite the visually meaningful
-   subtypes over the rendered page.
-2. Geometry stored unrotated, transformed at paint time, following the search
-   hit rule.
-3. Verify: a document highlighted in another viewer shows those highlights in
-   MERGEN, correctly placed at 250% zoom and rotated 90°, and correctly under
-   night mode.
+Smaller than planned, because the premise was wrong — see the amendment in §9.
+
+1. Ask for annotations explicitly rather than inheriting poppler's default.
+2. Report in the properties overlay how much markup a document carries, so a
+   reader knows the yellow is someone else's and not part of the page. Links
+   and form widgets are not counted: they are structure, not markup.
+3. Verify: a document annotated in another viewer shows that markup in MERGEN,
+   correct at 250% zoom, rotated 90° and 270°, and still legible under night
+   mode.
 4. Commit and tag:
 
 ```bash
@@ -794,6 +809,13 @@ candidates, with what each costs:
 - *Sidecar, with an explicit export.* Both, and the most work.
 
 Nothing is built toward any of them before the ruling.
+
+**Hiding annotations.** MERGEN draws the markup a document carries and offers
+no way to turn it off. A reader who wants the clean page underneath someone
+else's highlighting has a real want, and every large viewer has a switch for
+it. It is not built because nothing ruled it, and §12 does not permit inventing
+features mid-programme — recorded here so the question is asked rather than
+quietly answered by its absence.
 
 **Night-mode persistence.** Night mode is session-scoped, because §5 bans
 settings and §8 keeps state to what the reader explicitly made. A reader who
