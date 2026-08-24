@@ -14,7 +14,10 @@ status=0
 
 echo "== tracked files =="
 # Every tracked path, including build/docs — §5 says "anywhere in the repo".
-if git grep -IniE "$pattern" -- ':!scripts/audit-attribution.sh' ':!docs/*'; then
+# Only this script is excluded, because it necessarily contains the pattern it
+# searches for. build/docs is deliberately NOT excluded: §5 says "anywhere in
+# the repo", and F1-build.md §F-10 called an exclusion there a blind spot.
+if git grep -IniE "$pattern" -- ':!scripts/audit-attribution.sh'; then
     echo "FAIL: attribution found in the tree"; status=1
 else echo "clean"; fi
 
