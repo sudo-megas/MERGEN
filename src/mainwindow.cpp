@@ -852,8 +852,25 @@ void MainWindow::updateStatusBar() {
     m_statusPath->setText(
         metrics.elidedText(path, Qt::ElideMiddle, qMax(80, m_statusPath->width())));
     m_statusPath->setToolTip(path);
-    m_statusMode->setText(permissionText(path));
-    m_statusDates->setText(dateText(path));
+
+    // Both of these stat() the file as *this* account, which fails for exactly
+    // the documents the elevation helper exists to open: the reader
+    // authenticated to read the bytes, they did not gain the right to inspect
+    // the file afterwards. Two empty labels look like a status bar that is
+    // broken rather than one that has answered honestly, so the reason is
+    // written where the value would be.
+    const QString mode = permissionText(path);
+    const QString dates = dateText(path);
+    const bool elevated = !m_doc->data().isEmpty();
+    const QString unavailable = elevated ? tr("needs privilege") : tr("not readable");
+
+    m_statusMode->setText(mode.isEmpty() ? unavailable : mode);
+    m_statusMode->setToolTip(mode.isEmpty() ? tr("This account cannot read the file's permissions. "
+                                                 "It was opened with elevated permission.")
+                                            : tr("The file's permissions, as ls reports them"));
+
+    m_statusDates->setText(dates.isEmpty() ? tr("Created   %1\nModified  %1").arg(unavailable)
+                                           : dates);
 }
 
 void MainWindow::addToolBarGap() {
