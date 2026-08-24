@@ -36,6 +36,7 @@
 #include <QDialogButtonBox>
 #include <QPainter>
 #include <QPlainTextEdit>
+#include <QProgressDialog>
 #include <QPrintDialog>
 #include <QPrinter>
 #include <QProgressBar>
@@ -1674,7 +1675,27 @@ void MainWindow::printDocument() {
         return;
     }
 
+    // A thousand pages at print resolution is minutes of rendering, and the
+    // window was simply frozen for all of it — measured at 346 s with no
+    // repaint and no way out. The dialog gives it back: progress while it
+    // works, and a cancel that is actually honoured between pages.
+    QProgressDialog progress(tr("Printing…"), tr("Cancel"), from, to + 1, this);
+    progress.setWindowModality(Qt::WindowModal);
+    progress.setWindowTitle(QFileInfo(m_doc->path()).fileName());
+    // Not before there is something to wait for: a two-page print should never
+    // flash a dialog.
+    progress.setMinimumDuration(600);
+    bool cancelled = false;
+
     for (int page = from; page <= to; ++page) {
+        progress.setValue(page);
+        // Rendering is synchronous, so the dialog only paints and only sees the
+        // Cancel click if the loop lets the event queue run.
+        QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents | QEventLoop::AllEvents);
+        if (progress.wasCanceled()) {
+            cancelled = true;
+            break;
+        }
         if (page != from && !printer.newPage()) {
             break;
         }
@@ -1690,6 +1711,16 @@ void MainWindow::printDocument() {
                            paper.y() + (paper.height() - target.height()) / 2, target.width(),
                            target.height());
         painter.drawImage(placed, image);
+    }
+    progress.setValue(to + 1);
+
+    if (cancelled) {
+        // Whatever reached the spooler stays there — a printer cannot unprint —
+        // but the reader is told rather than left guessing at a short stack.
+        painter.end();
+        printer.abort();
+        m_view->setNotice(tr("Printing stopped. Pages already sent will still print."));
+        return;
     }
     painter.end();
 }
