@@ -45,3 +45,41 @@ jobs:
       # do — see the comment above MERGEN_HELPER_PATH in CMakeLists.txt.
       - name: Privileged helper path
         run: bash scripts/audit-policy.sh build
+
+  # The acceptance suites, which until now ran only by hand. Every regression
+  # written for a real defect lives in them, and none of it was executed here —
+  # so the checks guarding the privileged path could have rotted between
+  # releases without anything saying so.
+  suites:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
+
+    steps:
+      - name: Install the toolchain
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --needed --noconfirm \
+            git cmake ninja gcc python \
+            qt6-base poppler-qt6 qpdf polkit ttf-cascadia-code-nerd
+
+      - name: Fetch the tree
+        uses: actions/checkout@v4
+
+      - name: Build
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -Wno-dev
+          cmake --build build
+
+      - name: Run the acceptance suites
+        run: |
+          # As an ordinary user, and this is not tidiness. Several checks turn on
+          # a directory the account cannot traverse; root ignores permission bits,
+          # so as root stat() succeeds, Presence::Unreadable never occurs, and
+          # every check about the elevation path passes without testing anything.
+          # run-all.sh refuses to run as root for that reason — this is the step
+          # that gives it an account it can refuse or accept honestly.
+          useradd -m tester
+          chown -R tester:tester .
+          sudo -u tester -H bash build/docs/tests/run-all.sh

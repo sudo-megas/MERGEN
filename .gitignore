@@ -37,4 +37,6 @@ compile_commands.json
 /build/docs/tests/z*check
 !/build/docs/tests/z*check.cpp
 !/build/docs/tests/z*check.sh
+# Compiler output kept beside each suite by run-all.sh, for when one fails.
+/build/docs/tests/*.log
 /z11/

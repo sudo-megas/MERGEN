@@ -7,6 +7,24 @@ ephemeral; this is the durable copy.
 They are NOT part of the CMake build. Each links against the objects the real
 build already produced, swapping out `main.cpp.o` for the test's own `main()`.
 
+## Run all of them
+
+    bash build/docs/tests/run-all.sh
+
+From the repository root, after `cmake --build build`. It writes the fixtures,
+compiles every suite, runs them plus `z8check.sh`, and exits with the number of
+suites that failed. About a minute and a quarter. This is the executable form of
+everything below, and it is what CI runs — the `suites` job in
+`.github/workflows/audit.yml`.
+
+> [!IMPORTANT]
+> **Not as root**, and the script refuses. Several checks turn on a directory
+> the account cannot traverse, and root ignores permission bits: as root,
+> `stat()` on a mode-000 directory succeeds, `Presence::Unreadable` never
+> occurs, and every check guarding the elevation path passes without testing
+> anything. That is why CI creates an ordinary user for the step rather than
+> using the container's root. A suite that cannot fail is worse than no suite.
+
 ## Build one
 
     B=<repo>/build
