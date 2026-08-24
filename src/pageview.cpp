@@ -10,6 +10,8 @@
 #include <QGuiApplication>
 #include <QMouseEvent>
 #include <QPainter>
+
+#include <algorithm>
 #include <QPaintEvent>
 #include <QResizeEvent>
 #include <QScrollBar>
@@ -20,6 +22,35 @@
 
 namespace mergen {
 namespace {
+
+/// Inverts a page's lightness, holding its hue and saturation.
+///
+/// Straight RGB inversion is one call and would have been cheaper, but it turns
+/// every photograph into a negative and every red chart cyan, which is why so
+/// many tools offering a dark PDF mode are unusable on anything but plain text.
+///
+/// In HSL the chroma C = (1 - |2L-1|) * S is unchanged by L -> 1-L, so only the
+/// offset m = L - C/2 moves, and the whole transform collapses to adding
+/// 255 - (max + min) to every channel. It is its own inverse, so toggling twice
+/// returns the original image exactly.
+QImage invertLightness(const QImage &in) {
+    QImage out = in.convertToFormat(QImage::Format_RGB32);
+    const int height = out.height();
+    const int width = out.width();
+    for (int y = 0; y < height; ++y) {
+        auto *line = reinterpret_cast<QRgb *>(out.scanLine(y));
+        for (int x = 0; x < width; ++x) {
+            const QRgb pixel = line[x];
+            const int r = qRed(pixel);
+            const int g = qGreen(pixel);
+            const int b = qBlue(pixel);
+            const int shift = 255 - (std::max({r, g, b}) + std::min({r, g, b}));
+            line[x] = qRgb(std::clamp(r + shift, 0, 255), std::clamp(g + shift, 0, 255),
+                           std::clamp(b + shift, 0, 255));
+        }
+    }
+    return out;
+}
 
 /// How long the pointer must be held on a link before its target is peeked.
 /// Long enough that a click through a link is never mistaken for a peek, short
@@ -207,9 +238,43 @@ QPair<int, int> PageView::visibleRange() const {
 const QImage &PageView::cachedPage(int index) {
     auto it = m_cache.find(index);
     if (it == m_cache.end()) {
-        it = m_cache.insert(index, m_doc->renderPage(index, m_zoom, m_rotation));
+        // The one transform stage between poppler's decode and the cache. A
+        // page rendered inverted and a page rendered plainly are not the same
+        // image, so the cache is dropped whenever the mode changes rather than
+        // being asked to hold both — see setNightMode.
+        QImage page = m_doc->renderPage(index, m_zoom, m_rotation);
+        if (m_night && !page.isNull()) {
+            page = invertLightness(page);
+        }
+        it = m_cache.insert(index, page);
     }
     return it.value();
+}
+
+QColor PageView::surroundColour() const {
+    const QColor base = palette().color(QPalette::Base);
+    if (!m_night) {
+        return base;
+    }
+    // The canvas the pages sit on is not chrome, and a night mode that leaves
+    // it glowing has not done the one thing it was turned on for. The same
+    // lightness inversion is applied to it, so it stays derived from the
+    // reader's palette rather than named here.
+    const int shift = 255 - (std::max({base.red(), base.green(), base.blue()}) +
+                             std::min({base.red(), base.green(), base.blue()}));
+    return QColor(std::clamp(base.red() + shift, 0, 255), std::clamp(base.green() + shift, 0, 255),
+                  std::clamp(base.blue() + shift, 0, 255));
+}
+
+void PageView::setNightMode(bool on) {
+    if (m_night == on) {
+        return;
+    }
+    m_night = on;
+    // Every cached page was rendered for the mode that just ended.
+    m_cache.clear();
+    viewport()->update();
+    Q_EMIT nightModeChanged(m_night);
 }
 
 void PageView::dropPagesOutside(int first, int last) {
@@ -224,7 +289,7 @@ void PageView::dropPagesOutside(int first, int last) {
 
 void PageView::paintEvent(QPaintEvent *event) {
     QPainter painter(viewport());
-    painter.fillRect(event->rect(), palette().base());
+    painter.fillRect(event->rect(), surroundColour());
 
     if (m_layout.isEmpty()) {
         paintEmptyState(painter);

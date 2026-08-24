@@ -295,9 +295,17 @@ across documents.
 
 **Night mode** inverts lightness only. The page's own colours keep their hue
 and saturation, so figures remain readable and photographs remain
-photographs. It applies to the rendered page and to nothing else — the toolbar
-and overlays follow the system palette exactly as before, because MERGEN does
-not theme itself.
+photographs. The toolbar, the overlays and every dialog follow the system
+palette exactly as before, because MERGEN does not theme itself.
+
+> [!NOTE]
+> **Amended at Z5.** This section first said night mode applies to the
+> rendered page "and to nothing else". It also inverts the canvas the pages
+> sit on. That canvas is not chrome — it is the surround of the page itself,
+> and on a light system theme a dark page on a bright surround leaves most of
+> the glare the mode was turned on to remove. It is inverted by the same
+> transform, from `QPalette::Base`, so it stays derived from the reader's
+> palette rather than named. Nothing else moves.
 
 **Presentation mode** takes the window fullscreen, withdraws the toolbar,
 fills the surround with black rather than `QPalette::Base`, and shows one page
@@ -420,9 +428,26 @@ what keeps them behaving identically — a reader who learns `Esc` learns it onc
 
 *The render hook.* A transform stage between poppler's decode and the page
 cache. Night mode is the first user and is one pass over the decoded image;
-annotation compositing is the second. The cache key gains the transform state,
-because a page rendered inverted and a page rendered normally are not the same
-image, and v1.0's key would have happily returned one for the other.
+annotation compositing is the second. A page rendered inverted and a page
+rendered plainly are not the same image, and v1.0's cache key would have
+happily returned one for the other.
+
+> [!NOTE]
+> **Amended at Z5.** This section first said the cache key gains the transform
+> state. The cache is cleared when the mode changes instead, which is what
+> zoom and rotation already do and answers the same correctness worry without
+> holding two copies of every visible page for a mode the reader is not
+> looking at. Toggling is rare; the pages re-render on the next paint.
+
+The inversion itself is worth stating, because the obvious implementation is
+wrong. Straight RGB inversion is one call and turns every photograph into a
+negative and every red chart cyan, which is why so many tools offering a dark
+PDF mode are unusable on anything but plain text. Inverting lightness while
+holding hue and saturation has a closed form: in HSL the chroma
+`C = (1 - |2L-1|) · S` is unchanged by `L → 1-L`, so only the offset
+`m = L - C/2` moves, and the whole transform collapses to adding
+`255 - (max + min)` to every channel. It is its own inverse, so toggling twice
+returns the original image exactly.
 
 **Annotation rendering.** Poppler exposes a page's annotations, and MERGEN
 draws the ones that carry visual meaning — highlights, underlines, squiggles,

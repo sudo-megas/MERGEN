@@ -61,6 +61,12 @@ public:
     void rotateClockwise();
     void rotateCounterClockwise();
 
+    /// Night mode inverts the page's lightness and leaves its hue and
+    /// saturation alone, so a red chart stays red — MZ.md \ref 9. Session
+    /// scoped: nothing about it is written to disk.
+    bool isNightMode() const { return m_night; }
+    void setNightMode(bool on);
+
     /// The page under the viewport centre, zero-based. -1 with no document.
     int currentPage() const;
     void scrollToPage(int index);
@@ -103,6 +109,7 @@ Q_SIGNALS:
     void pageChanged(int index);
     void noticeClicked();
     void searchHitsChanged(int count, int current);
+    void nightModeChanged(bool on);
     /// The reader has held the pointer down on an internal link long enough to
     /// mean it. Carries the destination page, zero-based.
     void linkPeekRequested(int page);
@@ -159,6 +166,9 @@ private:
     /// Derived from QPalette::Highlight at runtime: hue turned through 180
     /// degrees so a hit always contrasts with both the selection and the page.
     QColor searchColor(int alpha) const;
+    /// The colour behind the pages. QPalette::Base normally; its lightness
+    /// inverted in night mode, since the canvas is not chrome.
+    QColor surroundColour() const;
 
     /// A point of the document expressed independently of zoom: which page,
     /// and where inside it, so that a zoom change can put it back under the
@@ -192,6 +202,7 @@ private:
     QString m_notice;
     int m_reportedPage = -1;
 
+    bool m_night = false;
     double m_zoom = 1.0;
     ZoomMode m_zoomMode = ZoomMode::FitWidth;
     Poppler::Page::Rotation m_rotation = Poppler::Page::Rotate0;

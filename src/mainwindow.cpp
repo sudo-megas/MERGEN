@@ -357,6 +357,12 @@ void MainWindow::buildToolBar() {
     // They are handled where focus actually is — in the page view's key
     // handler and in the search field's event filter.
 
+    auto *nightAction = new QAction(this);
+    nightAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+N")));
+    connect(nightAction, &QAction::triggered, this,
+            [this] { m_view->setNightMode(!m_view->isNightMode()); });
+    addAction(nightAction);
+
     auto *commandAction = new QAction(this);
     commandAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+K")));
     connect(commandAction, &QAction::triggered, this, &MainWindow::showCommands);
