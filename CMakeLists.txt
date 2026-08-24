@@ -44,7 +44,9 @@ add_executable(mergen
     src/pageview.cpp
     src/pageview.h
     src/document.cpp
-    src/document.h)
+    src/document.h
+    src/iconset.cpp
+    src/iconset.h)
 
 target_compile_definitions(mergen PRIVATE
     MERGEN_VERSION="${PROJECT_VERSION}"

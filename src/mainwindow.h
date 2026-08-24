@@ -6,9 +6,11 @@
 
 #include <QByteArray>
 #include <QMainWindow>
+#include <QPair>
 #include <QPointer>
 #include <QString>
 #include <QStringList>
+#include <QVector>
 
 #include <memory>
 
@@ -43,7 +45,23 @@ public:
 
 private:
     void buildToolBar();
-    QToolButton *addGlyphAction(QAction *action, const QString &glyph, const QString &label);
+    /// Builds one toolbar button: the glyph becomes the action's icon and the
+    /// label becomes its text. With no menu bar the tooltip is the only place
+    /// a shortcut is discoverable, which makes it load-bearing here — MZ.md §6.
+    /// \a keyHint names keys handled in the page view rather than registered as
+    /// window-wide shortcuts, which single letters must never be.
+    QToolButton *addGlyphAction(QAction *action, char16_t glyph, const QString &label,
+                                const QString &keyHint = QString());
+
+    /// Re-renders every toolbar icon against the current palette. Called when
+    /// the theme changes: a pixmap tinted for the old palette is wrong.
+    void applyIcons();
+
+    /// Enables and disables toolbar actions against what is actually possible
+    /// right now — no document, or zoom already at its bound.
+    void updateActionStates();
+
+    void changeEvent(QEvent *event) override;
 
     void updateTitle();
     void closeDocument(const QString &message = QString());
@@ -102,6 +120,10 @@ private:
     QAction *m_searchAction = nullptr;
     QAction *m_printAction = nullptr;
     QAction *m_quitAction = nullptr;
+
+    /// Every action carrying a glyph, so all icons can be re-rendered together
+    /// when the palette changes.
+    QVector<QPair<QAction *, char16_t>> m_glyphActions;
 
     QMenu *m_recentMenu = nullptr;
     QStringList m_recent;

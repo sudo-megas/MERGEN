@@ -4,6 +4,7 @@
 
 #include "mainwindow.h"
 #include "document.h"
+#include "iconset.h"
 #include "pageview.h"
 #include "license.h"
 
@@ -33,6 +34,8 @@
 #include <QPrinter>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QStyleOptionToolButton>
+#include <QStylePainter>
 #include <QThread>
 #include <QVBoxLayout>
 #include <QProcess>
@@ -41,21 +44,10 @@
 #include <QToolButton>
 #include <QWidget>
 
+#include <utility>
+
 namespace mergen {
 namespace {
-
-// Font Awesome 5 code points as patched into CaskaydiaCove Nerd Font. Set as
-// action text in a glyph font, so MERGEN needs no icon theme and ships no
-// image assets — see MX.md §5.
-constexpr char16_t kGlyphOpen = u'';
-constexpr char16_t kGlyphZoomOut = u'';
-constexpr char16_t kGlyphZoomIn = u'';
-constexpr char16_t kGlyphFitWidth = u'';
-constexpr char16_t kGlyphFitPage = u'';
-constexpr char16_t kGlyphRotate = u'';
-constexpr char16_t kGlyphSearch = u'';
-constexpr char16_t kGlyphPrint = u'';
-constexpr char16_t kGlyphClose = u'';
 
 constexpr int kRecentLimit = 10;
 
@@ -63,9 +55,67 @@ constexpr int kRecentLimit = 10;
 /// paper does not improve.
 constexpr int kPrintDpiCap = 600;
 
-QString glyph(char16_t code) {
-    return QString(QChar(code));
-}
+/// Alpha applied to the palette's highlight colour for the two interactive
+/// states. Proportions, not colours: the hue is always the reader's own.
+constexpr int kHoverAlpha = 46;
+constexpr int kPressedAlpha = 82;
+
+/// A toolbar button that draws its own hover and pressed background.
+///
+/// v1.0 left this to whichever QStyle the reader happened to have, which meant
+/// the surface they touch most looked different from desktop to desktop and,
+/// under stock Fusion, looked like almost nothing at all. The wash here is
+/// derived from QPalette::Highlight rather than named, so it follows the
+/// reader's accent colour the way the selection and search colours already do
+/// — MZ.md §6. Only the frame is ours; the contents stay the platform's.
+class GlyphButton : public QToolButton {
+public:
+    explicit GlyphButton(QWidget *parent) : QToolButton(parent) {
+        setAutoRaise(true);
+        setFocusPolicy(Qt::NoFocus);
+        // Without this Qt sends no paint event on mouse enter and leave, so the
+        // hover state would never be drawn at all.
+        setAttribute(Qt::WA_Hover, true);
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override {
+        QStylePainter painter(this);
+        QStyleOptionToolButton option;
+        initStyleOption(&option);
+
+        const bool pressed = isEnabled() && (option.state & QStyle::State_Sunken);
+        const bool hovered = isEnabled() && (option.state & QStyle::State_MouseOver);
+
+        if (pressed || hovered) {
+            QColor wash = palette().color(QPalette::Highlight);
+            wash.setAlpha(pressed ? kPressedAlpha : kHoverAlpha);
+            const qreal radius = height() * 0.18;
+            painter.setRenderHint(QPainter::Antialiasing, true);
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(wash);
+            painter.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), radius, radius);
+            painter.setRenderHint(QPainter::Antialiasing, false);
+        }
+
+        // With a dropdown the label owns only part of the button, and the arrow
+        // is a separate primitive that drawing the label does not cover.
+        const bool hasMenu = popupMode() == QToolButton::MenuButtonPopup;
+        QStyleOptionToolButton label = option;
+        if (hasMenu) {
+            label.rect = style()->subControlRect(QStyle::CC_ToolButton, &option,
+                                                 QStyle::SC_ToolButton, this);
+        }
+        painter.drawControl(QStyle::CE_ToolButtonLabel, label);
+
+        if (hasMenu) {
+            QStyleOption arrow = option;
+            arrow.rect = style()->subControlRect(QStyle::CC_ToolButton, &option,
+                                                 QStyle::SC_ToolButtonMenu, this);
+            painter.drawPrimitive(QStyle::PE_IndicatorArrowDown, arrow);
+        }
+    }
+};
 
 // One string: compositor-drawn decorations have no separate zones to fill.
 QString titleFor(const QString &fileName) {
@@ -73,22 +123,6 @@ QString titleFor(const QString &fileName) {
         return QStringLiteral(R"(MERGEN ///— —\\\ MEGAS)");
     }
     return QStringLiteral(R"(MERGEN ///— %1 —\\\ MEGAS)").arg(fileName);
-}
-
-/// The toolbar font: the Nerd Font when it is installed, otherwise whatever Qt
-/// hands us. A missing font costs the glyphs, not the toolbar.
-QFont glyphFont() {
-    QFont font = QApplication::font();
-    const QStringList families = QFontDatabase::families();
-    for (const QString &candidate :
-         {QStringLiteral("CaskaydiaCove Nerd Font"), QStringLiteral("CaskaydiaCove NF"),
-          QStringLiteral("CaskaydiaMono Nerd Font")}) {
-        if (families.contains(candidate)) {
-            font.setFamily(candidate);
-            break;
-        }
-    }
-    return font;
 }
 
 /// TOML basic-string escaping, enough for the one thing MERGEN writes.
@@ -191,14 +225,27 @@ MainWindow::~MainWindow() {
     }
 }
 
-QToolButton *MainWindow::addGlyphAction(QAction *action, const QString &glyphText,
-                                        const QString &label) {
-    action->setText(glyphText + QStringLiteral("  ") + label);
-    auto *button = new QToolButton(m_toolBar);
+QToolButton *MainWindow::addGlyphAction(QAction *action, char16_t glyph, const QString &label,
+                                        const QString &keyHint) {
+    // The label is the action's text, and the glyph becomes its icon further
+    // down in applyIcons(). In v1.0 the glyph was the text, which is what made
+    // the button unreadable to assistive technology.
+    action->setText(label);
+    action->setIconText(label);
+
+    // With no menu bar and a fixed toolbar, the tooltip is the only place a
+    // shortcut is discoverable — MZ.md §6. keyHint carries the keys that are
+    // handled in the page view rather than registered as shortcuts here.
+    const QString keys =
+        keyHint.isEmpty() ? action->shortcut().toString(QKeySequence::NativeText) : keyHint;
+    action->setToolTip(keys.isEmpty() ? label : tr("%1  (%2)").arg(label, keys));
+
+    m_glyphActions.append({action, glyph});
+
+    auto *button = new GlyphButton(m_toolBar);
     button->setDefaultAction(action);
-    button->setToolButtonStyle(Qt::ToolButtonTextOnly);
-    button->setAutoRaise(true);
-    button->setFocusPolicy(Qt::NoFocus);
+    button->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    button->setAccessibleName(label);
     m_toolBar->addWidget(button);
     return button;
 }
@@ -208,57 +255,65 @@ void MainWindow::buildToolBar() {
     m_toolBar->setMovable(false);
     m_toolBar->setFloatable(false);
     m_toolBar->setContextMenuPolicy(Qt::PreventContextMenu);
-    m_toolBar->setFont(glyphFont());
+    // The toolbar no longer carries the glyph font: glyphs are painted into
+    // icons now, so the labels and the page counter use the reader's UI font.
 
     m_openAction = new QAction(this);
     m_openAction->setShortcut(QKeySequence::Open);
     connect(m_openAction, &QAction::triggered, this, &MainWindow::chooseFile);
-    QToolButton *openButton = addGlyphAction(m_openAction, glyph(kGlyphOpen), tr("Open"));
+    QToolButton *openButton = addGlyphAction(m_openAction, glyphs::kOpen, tr("Open"));
     m_recentMenu = new QMenu(openButton);
     openButton->setMenu(m_recentMenu);
     openButton->setPopupMode(QToolButton::MenuButtonPopup);
     rebuildRecentMenu();
 
+    m_toolBar->addSeparator();
+
     m_zoomOutAction = new QAction(this);
     m_zoomOutAction->setShortcut(QKeySequence::ZoomOut);
     connect(m_zoomOutAction, &QAction::triggered, m_view, &PageView::zoomOut);
-    addGlyphAction(m_zoomOutAction, glyph(kGlyphZoomOut), tr("Zoom out"));
+    addGlyphAction(m_zoomOutAction, glyphs::kZoomOut, tr("Zoom out"));
 
     m_zoomInAction = new QAction(this);
     // QKeySequence::ZoomIn is Ctrl++, which most keyboards produce as Ctrl+=.
     m_zoomInAction->setShortcuts({QKeySequence::ZoomIn, QKeySequence(QStringLiteral("Ctrl+="))});
     connect(m_zoomInAction, &QAction::triggered, m_view, &PageView::zoomIn);
-    addGlyphAction(m_zoomInAction, glyph(kGlyphZoomIn), tr("Zoom in"));
+    addGlyphAction(m_zoomInAction, glyphs::kZoomIn, tr("Zoom in"));
 
+    // F and Shift+F are handled in the page view's key handler, not as
+    // window-wide shortcuts: a single-letter shortcut is dispatched before the
+    // focused widget sees it, which would swallow every "f" typed into the
+    // search field. The tooltip still names the key, since §6 documents it.
     m_fitWidthAction = new QAction(this);
     connect(m_fitWidthAction, &QAction::triggered, m_view, &PageView::setFitWidth);
-    addGlyphAction(m_fitWidthAction, glyph(kGlyphFitWidth), tr("Fit width"));
+    addGlyphAction(m_fitWidthAction, glyphs::kFitWidth, tr("Fit width"), QStringLiteral("F"));
 
     m_fitPageAction = new QAction(this);
     connect(m_fitPageAction, &QAction::triggered, m_view, &PageView::setFitPage);
-    addGlyphAction(m_fitPageAction, glyph(kGlyphFitPage), tr("Fit page"));
+    addGlyphAction(m_fitPageAction, glyphs::kFitPage, tr("Fit page"), QStringLiteral("Shift+F"));
+
+    m_toolBar->addSeparator();
 
     m_rotateAction = new QAction(this);
     m_rotateAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+R")));
     connect(m_rotateAction, &QAction::triggered, m_view, &PageView::rotateClockwise);
-    addGlyphAction(m_rotateAction, glyph(kGlyphRotate), tr("Rotate"));
+    addGlyphAction(m_rotateAction, glyphs::kRotate, tr("Rotate"));
 
     m_searchAction = new QAction(this);
     m_searchAction->setShortcut(QKeySequence::Find);
     connect(m_searchAction, &QAction::triggered, this, &MainWindow::openSearch);
-    addGlyphAction(m_searchAction, glyph(kGlyphSearch), tr("Search"));
+    addGlyphAction(m_searchAction, glyphs::kSearch, tr("Search"));
 
     m_printAction = new QAction(this);
     m_printAction->setShortcut(QKeySequence::Print);
     connect(m_printAction, &QAction::triggered, this, &MainWindow::printDocument);
-    addGlyphAction(m_printAction, glyph(kGlyphPrint), tr("Print"));
+    addGlyphAction(m_printAction, glyphs::kPrint, tr("Print"));
 
     // Counter-clockwise rotation is a keybinding only; §5 gives the toolbar one
     // rotate button.
     m_rotateBackAction = new QAction(this);
     m_rotateBackAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+R")));
-    connect(m_rotateBackAction, &QAction::triggered, m_view,
-            &PageView::rotateCounterClockwise);
+    connect(m_rotateBackAction, &QAction::triggered, m_view, &PageView::rotateCounterClockwise);
     addAction(m_rotateBackAction);
 
     auto *resetZoomAction = new QAction(this);
@@ -304,11 +359,67 @@ void MainWindow::buildToolBar() {
     m_pageEdit->setValidator(new QIntValidator(1, 1, m_pageEdit));
     m_pageEdit->setFixedWidth(m_pageEdit->fontMetrics().horizontalAdvance(QStringLiteral("00000")) +
                               16);
+    m_pageEdit->setToolTip(tr("Page number  (type a page and press Enter)"));
+    m_pageEdit->setAccessibleName(tr("Page number"));
     connect(m_pageEdit, &QLineEdit::returnPressed, this, &MainWindow::jumpToTypedPage);
     m_toolBar->addWidget(m_pageEdit);
 
     m_pageTotal = new QLabel(m_toolBar);
+    m_pageTotal->setAccessibleName(tr("Page count"));
     m_toolBar->addWidget(m_pageTotal);
+
+    // Zoom bounds decide whether the two zoom buttons are still live.
+    connect(m_view, &PageView::zoomChanged, this, [this](double) { updateActionStates(); });
+
+    applyIcons();
+    updateActionStates();
+}
+
+void MainWindow::applyIcons() {
+    if (!m_toolBar) {
+        return;
+    }
+    const int extent = m_toolBar->iconSize().width();
+    for (const auto &entry : std::as_const(m_glyphActions)) {
+        // A null icon when the font is missing leaves the label standing alone,
+        // which is the v1.0 behaviour and better than a tofu box.
+        entry.first->setIcon(IconSet::icon(entry.second, extent, palette()));
+    }
+    if (m_searchCancel) {
+        m_searchCancel->setIcon(IconSet::icon(glyphs::kClose, extent, palette()));
+    }
+}
+
+void MainWindow::updateActionStates() {
+    const bool open = m_doc && m_doc->isOpen();
+
+    for (QAction *action : {m_fitWidthAction, m_fitPageAction, m_rotateAction, m_rotateBackAction,
+                            m_searchAction, m_printAction}) {
+        if (action) {
+            action->setEnabled(open);
+        }
+    }
+
+    // Comparing doubles that were reached by repeated stepping needs slack, and
+    // half a step is far tighter than any step yet still never misses a bound.
+    constexpr double kSlack = PageView::kZoomStep / 2.0;
+    const double zoom = m_view ? m_view->zoom() : 1.0;
+    if (m_zoomInAction) {
+        m_zoomInAction->setEnabled(open && zoom < PageView::kMaxZoom - kSlack);
+    }
+    if (m_zoomOutAction) {
+        m_zoomOutAction->setEnabled(open && zoom > PageView::kMinZoom + kSlack);
+    }
+}
+
+void MainWindow::changeEvent(QEvent *event) {
+    QMainWindow::changeEvent(event);
+    if (event->type() == QEvent::PaletteChange ||
+        event->type() == QEvent::ApplicationPaletteChange || event->type() == QEvent::ThemeChange) {
+        // Every cached pixmap was tinted for the palette that just went away.
+        IconSet::clearCache();
+        applyIcons();
+    }
 }
 
 void MainWindow::openPath(const QString &path) {
@@ -394,8 +505,8 @@ void MainWindow::updateTitle() {
 void MainWindow::chooseFile() {
     const QString start =
         m_doc->isOpen() ? QFileInfo(m_doc->path()).absolutePath() : QDir::homePath();
-    const QString chosen = QFileDialog::getOpenFileName(this, tr("Open PDF"), start,
-                                                        tr("PDF documents (*.pdf)"));
+    const QString chosen =
+        QFileDialog::getOpenFileName(this, tr("Open PDF"), start, tr("PDF documents (*.pdf)"));
     if (!chosen.isEmpty()) {
         openPath(chosen);
     }
@@ -411,6 +522,7 @@ void MainWindow::reloadDocument() {
 }
 
 void MainWindow::onPageChanged(int index) {
+    updateActionStates();
     const int count = m_doc->pageCount();
     if (!m_doc->isOpen() || count <= 0) {
         m_pageEdit->clear();
@@ -419,8 +531,7 @@ void MainWindow::onPageChanged(int index) {
         return;
     }
     m_pageEdit->setEnabled(true);
-    static_cast<QIntValidator *>(const_cast<QValidator *>(m_pageEdit->validator()))
-        ->setTop(count);
+    static_cast<QIntValidator *>(const_cast<QValidator *>(m_pageEdit->validator()))->setTop(count);
     m_pageTotal->setText(QStringLiteral(" / %1").arg(count));
     if (!m_pageEdit->hasFocus()) {
         m_pageEdit->setText(QString::number(qMax(0, index) + 1));
@@ -449,9 +560,8 @@ bool MainWindow::promptForPassword(const QString &fileName) {
     forever {
         bool accepted = false;
         QString typed =
-            QInputDialog::getText(this, tr("MERGEN"),
-                                  tr("Password for %1:").arg(fileName), QLineEdit::Password,
-                                  QString(), &accepted);
+            QInputDialog::getText(this, tr("MERGEN"), tr("Password for %1:").arg(fileName),
+                                  QLineEdit::Password, QString(), &accepted);
         if (!accepted) {
             typed.fill(QLatin1Char('\0'));
             return false;
@@ -519,8 +629,6 @@ void MainWindow::watchDocument(const QString &path) {
         m_watcher->addPath(path);
     }
 }
-
-
 
 // --- Printing --------------------------------------------------------------
 
@@ -591,8 +699,7 @@ void MainWindow::showAbout() {
     // there to be read and copied, never to open a browser. MX.md §4.
     auto *heading = new QLabel(&dialog);
     heading->setTextFormat(Qt::PlainText);
-    heading->setTextInteractionFlags(Qt::TextSelectableByMouse |
-                                     Qt::TextSelectableByKeyboard);
+    heading->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
     heading->setText(tr("MERGEN %1\n"
                         "A minimal PDF viewer\n\n"
                         "Made by MEGAS\n"
@@ -652,8 +759,8 @@ void MainWindow::buildSearchBar() {
     row->addWidget(m_searchProgress);
 
     m_searchCancel = new QPushButton(m_searchBar);
-    m_searchCancel->setFont(glyphFont());
-    m_searchCancel->setText(glyph(kGlyphClose) + QStringLiteral("  ") + tr("Cancel"));
+    m_searchCancel->setText(tr("Cancel"));
+    m_searchCancel->setToolTip(tr("Stop the search and keep the hits found so far"));
     m_searchCancel->setFlat(true);
     m_searchCancel->hide();
     connect(m_searchCancel, &QPushButton::clicked, this, [this] {
@@ -773,9 +880,8 @@ void MainWindow::updateSearchStatus() {
         return;
     }
     const int current = m_view->currentSearchHit();
-    m_searchStatus->setText(m_searchWorker
-                                ? tr("%1 of %2 so far").arg(current + 1).arg(count)
-                                : tr("%1 of %2").arg(current + 1).arg(count));
+    m_searchStatus->setText(m_searchWorker ? tr("%1 of %2 so far").arg(current + 1).arg(count)
+                                           : tr("%1 of %2").arg(current + 1).arg(count));
 }
 
 bool MainWindow::eventFilter(QObject *watched, QEvent *event) {
