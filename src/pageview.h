@@ -55,18 +55,30 @@ public:
     void rotateClockwise();
     void rotateCounterClockwise();
 
+    /// The page under the viewport centre, zero-based. -1 with no document.
+    int currentPage() const;
+    void scrollToPage(int index);
+
+    /// A one-line clickable bar drawn at the top of the page area. Empty text
+    /// removes it. Used for the on-disk-change reload prompt, so that MERGEN
+    /// never interrupts with a dialog.
+    void setNotice(const QString &text);
+
     static constexpr double kMinZoom = 0.10;
     static constexpr double kMaxZoom = 10.0;
     static constexpr double kZoomStep = 0.10;
 
 Q_SIGNALS:
     void zoomChanged(double factor);
+    void pageChanged(int index);
+    void noticeClicked();
 
 protected:
     void paintEvent(QPaintEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
     void keyPressEvent(QKeyEvent *event) override;
     void wheelEvent(QWheelEvent *event) override;
+    void mousePressEvent(QMouseEvent *event) override;
     void scrollContentsBy(int dx, int dy) override;
 
 private:
@@ -79,6 +91,10 @@ private:
     /// Top-left of the content area in viewport coordinates.
     QPoint contentOrigin() const;
     void dropPagesOutside(int first, int last);
+    void emitPageIfChanged();
+    /// Notice bar geometry in viewport coordinates; null when no notice is set.
+    QRect noticeRect() const;
+    void paintNotice(QPainter &painter);
 
     /// A point of the document expressed independently of zoom: which page,
     /// and where inside it, so that a zoom change can put it back under the
@@ -109,6 +125,8 @@ private:
 
     Document *m_doc = nullptr;
     QString m_message;
+    QString m_notice;
+    int m_reportedPage = -1;
 
     double m_zoom = 1.0;
     ZoomMode m_zoomMode = ZoomMode::FitWidth;

@@ -6,6 +6,7 @@
 #include "document.h"
 
 #include <QKeyEvent>
+#include <QMouseEvent>
 #include <QPainter>
 #include <QPaintEvent>
 #include <QResizeEvent>
@@ -47,13 +48,45 @@ void PageView::setDocument(Document *doc) {
     relayout();
     verticalScrollBar()->setValue(0);
     horizontalScrollBar()->setValue(0);
+    m_reportedPage = -1;
     Q_EMIT zoomChanged(m_zoom);
+    emitPageIfChanged();
     viewport()->update();
 }
 
 void PageView::setMessage(const QString &text) {
     m_message = text;
     viewport()->update();
+}
+
+void PageView::setNotice(const QString &text) {
+    if (m_notice == text) {
+        return;
+    }
+    m_notice = text;
+    viewport()->update();
+}
+
+int PageView::currentPage() const {
+    return m_layout.isEmpty() ? -1 : captureAnchor().page;
+}
+
+void PageView::scrollToPage(int index) {
+    if (index < 0 || index >= m_layout.size()) {
+        return;
+    }
+    // Land on the page top rather than centring it: the reader wants to start
+    // reading at the top of the page they asked for.
+    verticalScrollBar()->setValue(m_layout.at(index).top() - kPageGap);
+    emitPageIfChanged();
+}
+
+void PageView::emitPageIfChanged() {
+    const int page = currentPage();
+    if (page != m_reportedPage) {
+        m_reportedPage = page;
+        Q_EMIT pageChanged(page);
+    }
 }
 
 void PageView::relayout() {
@@ -164,6 +197,7 @@ void PageView::paintEvent(QPaintEvent *event) {
 
     if (m_layout.isEmpty()) {
         paintEmptyState(painter);
+        paintNotice(painter);
         return;
     }
 
@@ -187,6 +221,42 @@ void PageView::paintEvent(QPaintEvent *event) {
         }
         painter.drawImage(target.topLeft(), image);
     }
+
+    paintNotice(painter);
+}
+
+QRect PageView::noticeRect() const {
+    if (m_notice.isEmpty()) {
+        return QRect();
+    }
+    const QFontMetrics fm(font());
+    const int w = qMin(viewport()->width() - 2 * kPageGap, fm.horizontalAdvance(m_notice) + 32);
+    const int h = fm.height() + 16;
+    return QRect((viewport()->width() - w) / 2, kPageGap, w, h);
+}
+
+void PageView::paintNotice(QPainter &painter) {
+    const QRect bar = noticeRect();
+    if (bar.isNull()) {
+        return;
+    }
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(palette().color(QPalette::Highlight));
+    painter.drawRoundedRect(bar, 4, 4);
+    painter.setPen(palette().color(QPalette::HighlightedText));
+    painter.drawText(bar, Qt::AlignCenter, m_notice);
+    painter.restore();
+}
+
+void PageView::mousePressEvent(QMouseEvent *event) {
+    if (event->button() == Qt::LeftButton && noticeRect().contains(event->position().toPoint())) {
+        Q_EMIT noticeClicked();
+        event->accept();
+        return;
+    }
+    QAbstractScrollArea::mousePressEvent(event);
 }
 
 void PageView::paintEmptyState(QPainter &painter) {
@@ -221,6 +291,7 @@ void PageView::resizeEvent(QResizeEvent *event) {
 void PageView::scrollContentsBy(int dx, int dy) {
     Q_UNUSED(dx);
     Q_UNUSED(dy);
+    emitPageIfChanged();
     viewport()->update();
 }
 
@@ -377,6 +448,7 @@ void PageView::applyScale(double factor, Poppler::Page::Rotation rotation) {
     relayout();
     restoreAnchor(anchor);
     Q_EMIT zoomChanged(m_zoom);
+    emitPageIfChanged();
     viewport()->update();
 }
 

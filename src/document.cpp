@@ -53,18 +53,43 @@ LoadStatus Document::openData(const QByteArray &bytes, const QString &path,
 }
 
 LoadStatus Document::adopt(std::unique_ptr<Poppler::Document> doc, const QByteArray &password) {
-    if (doc->isLocked() && !doc->unlock(password, password)) {
+    // Poppler::Document::unlock() reports whether the document is *still*
+    // locked, so a true return means the password did not open it. Loading has
+    // already tried the empty password, so an empty one here cannot help.
+    if (doc->isLocked() && (password.isEmpty() || doc->unlock(password, password))) {
         // Keep the handle: the caller prompts and calls unlock through a retry.
         m_doc = std::move(doc);
         return LoadStatus::NeedsPassword;
     }
 
-    doc->setRenderHint(Poppler::Document::Antialiasing, true);
-    doc->setRenderHint(Poppler::Document::TextAntialiasing, true);
-    doc->setRenderHint(Poppler::Document::TextSlightHinting, true);
-
     m_doc = std::move(doc);
+    applyRenderHints();
     return LoadStatus::Ok;
+}
+
+void Document::applyRenderHints() {
+    if (!m_doc) {
+        return;
+    }
+    m_doc->setRenderHint(Poppler::Document::Antialiasing, true);
+    m_doc->setRenderHint(Poppler::Document::TextAntialiasing, true);
+    m_doc->setRenderHint(Poppler::Document::TextSlightHinting, true);
+}
+
+bool Document::unlock(const QByteArray &password) {
+    if (!m_doc) {
+        return false;
+    }
+    if (!m_doc->isLocked()) {
+        return true;
+    }
+    if (m_doc->unlock(password, password)) {
+        return false; // still locked: wrong password
+    }
+    // unlock() rebuilds poppler's internal document, so the hints set at load
+    // time are gone with it.
+    applyRenderHints();
+    return true;
 }
 
 void Document::close() {

@@ -62,6 +62,7 @@ Written for and tested on: Arch Linux, Wayland, Niri, `prefer-no-csd` enabled.
 | `qt6-base` | Widgets, painting, scroll view, input handling, file dialog, printing |
 | `poppler-qt6` | PDF parsing, page rendering to `QImage`, text extraction, search |
 | `ttf-cascadia-code-nerd` | Toolbar icon glyphs — see §5 |
+| `polkit` | `pkexec`, for opening PDFs the reader may not read — see §5 |
 
 Build-time only: `cmake`, `ninja`, `gcc`.
 
@@ -70,6 +71,13 @@ Nothing else. No KF6, no GTK, no glib, no network library, no database.
 CUPS arrives indirectly through `qt6-base`'s print support and is accepted
 deliberately — printing PDFs is a real and frequent task here, so the dependency
 earns its place.
+
+`polkit` arrives for one job: opening a PDF that sits behind permissions the
+reader does not have. The alternative is refusing the file and leaving the
+reader to relaunch the whole viewer as root, which is worse for safety and worse
+for use, so it earns its place too. MERGEN itself never runs privileged — a
+hundred-line helper does, for exactly as long as it takes to copy one file's
+bytes.
 
 > [!NOTE]
 > Qt has no desktop-portal theme hint on a bare Wayland session, so MERGEN
@@ -87,7 +95,7 @@ Seven features plus printing. This list is closed for v1.0.
 
 | Feature | Notes |
 |---|---|
-| Open a PDF | `argv[1]`, Ctrl+O, toolbar Open button, recent-files dropdown |
+| Open a PDF | `argv[1]`, Ctrl+O, toolbar Open button, recent-files dropdown; unreadable files are offered through polkit — see §5 |
 | Continuous vertical scroll | All pages in one scrolling column, viewport-culled, smooth pixel scrolling |
 | Zoom | 10% steps, 10%–1000%, plus fit-width and fit-page |
 | Page jump | By typing into the toolbar page counter |
@@ -189,6 +197,27 @@ retry loop on failure and cancel returning to the empty state. The password
 lives in memory for the session only — never written to disk, never placed in
 `recent.toml`, wiped on close.
 
+**Root-owned and unreadable files.** When a PDF exists but the reader has no
+permission to read it, MERGEN does not stop at the error. It runs `mergen-open`
+— a small privileged helper — through `pkexec`, and loads the bytes it hands
+back from memory. The authentication prompt belongs to the polkit agent, not to
+MERGEN; declining it leaves the same centred error text in the empty view as any
+other failure, and a session with no authentication agent running says so rather
+than hanging.
+
+The helper is the narrow part, and is narrow on purpose. It takes one absolute
+path, and only once it holds the file descriptor — not before, so the name
+cannot be swapped underneath it — does it decide what it is holding: anything
+that is not a regular file beginning `%PDF-` is refused. The polkit action
+authorises reading a PDF, and reading a PDF is the only thing the helper can be
+made to do, so it cannot be turned into a general-purpose read of privileged
+files. It is never installed setuid, and MERGEN itself never runs with
+privilege.
+
+A file opened this way is not watched for changes: `QFileSystemWatcher` needs
+read permission it does not have, so the reload notice never appears for it.
+Nothing else about the document differs.
+
 ---
 
 ## 6. Keybindings
@@ -245,8 +274,9 @@ file the next time it is written.
 
 ## 8. Architecture
 
-Four translation units. No plugin system, no abstraction layer over poppler, no
-generator indirection.
+Four translation units in the viewer, plus a one-file helper built as a separate
+binary. No plugin system, no abstraction layer over poppler, no generator
+indirection.
 
 | File | Responsibility |
 |---|---|
@@ -254,6 +284,7 @@ generator indirection.
 | `mainwindow.cpp` | Toolbar, actions, keybindings, file dialog, print, recent list, password prompt, file watcher |
 | `pageview.cpp` | The scrolling page column: layout, culling, painting, zoom, selection, search highlighting, empty-state and error text |
 | `document.cpp` | Thin wrapper over `Poppler::Document` — page count, page size, render, `search()`, `textList()` |
+| `mergen-open.cpp` | The privileged reader. A separate binary, not linked into `mergen` |
 
 **Rendering model.** Pages are laid out in a single vertical column with a fixed
 gap. Only pages intersecting the viewport (plus one page of margin above and
@@ -289,6 +320,14 @@ in flight.
 
 Poppler document objects are not thread-safe, so the worker opens its own
 `Poppler::Document` handle on the same path rather than sharing the view's.
+
+**Elevation.** `readElevated()` starts `pkexec` under a local event loop rather
+than blocking on the process, so the window carries on painting while the
+agent's dialog is up instead of going grey. That leaves the toolbar live, so a
+re-entry guard stops a second open arriving through the nested loop. The bytes
+come back on the helper's standard output and go to
+`Poppler::Document::loadFromData()`; the search worker reuses that same
+`QByteArray` rather than reopening a path it cannot read.
 
 **Printing.** `QPrintDialog` supplies the page range; MERGEN honours it and
 renders each selected page at the printer's resolution rather than reusing the
@@ -381,14 +420,17 @@ git tag v0.1.2
    dropdown on the Open button, missing paths greyed.
 6. Error text in the empty page view for unreadable or non-PDF files.
 7. Password prompt via `QInputDialog` with retry loop; password never persisted.
-8. `QFileSystemWatcher` on the open document with an inline reload notice.
-9. Verify: opening from the dialog, from the dropdown, and from `argv[1]` all
-   land on the same code path.
-10. Commit and tag:
+8. `mergen-open`, the privileged reader, plus its polkit action; unreadable
+   files route through it and load from memory. Verify that it refuses a
+   root-owned file that is not a PDF.
+9. `QFileSystemWatcher` on the open document with an inline reload notice.
+10. Verify: opening from the dialog, from the dropdown, and from `argv[1]` all
+    land on the same code path.
+11. Commit and tag:
 
 ```bash
 git add -A
-git commit -m "M4: toolbar, file dialog, page jump, recent files, password prompt, file watcher"
+git commit -m "M4: toolbar, file dialog, page jump, recent files, password prompt, elevation, file watcher"
 git tag v0.1.3
 ```
 
@@ -445,7 +487,7 @@ git tag v0.1.5
 The only milestone that pushes, builds a package, or publishes anything.
 
 1. Write `PKGBUILD` — `pkgname=mergen`,
-   `depends=('qt6-base' 'poppler' 'ttf-cascadia-code-nerd')`,
+   `depends=('qt6-base' 'poppler-qt6' 'polkit' 'ttf-cascadia-code-nerd')`,
    `makedepends=('cmake' 'ninja' 'gcc')`, `arch=('x86_64')`, `license=('GPL3')`,
    standard `build()` and `package()` functions.
 2. Test the package locally in a clean chroot:
@@ -474,10 +516,13 @@ git commit -m "M7: PKGBUILD and release workflow"
 6. Create the repo on GitHub under the `sudo-megas` account, then push:
 
 ```bash
-git remote add origin git@github.com:sudo-megas/MERGEN.git
+git remote add origin https://github.com/sudo-megas/MERGEN.git
 git push -u origin ata
 git push --tags
 ```
+
+The remote is HTTPS rather than SSH because `gh` holds the credentials and is
+configured for HTTPS; there is no SSH key on the machine to push with.
 
 7. Tag and push the release tag, which triggers the workflow:
 
