@@ -1,0 +1,177 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="metal" x1="0.05" y1="0" x2="0.85" y2="1">
+      <stop offset="0" stop-color="#fbfcfd"/>
+      <stop offset="0.18" stop-color="#dfe5e9"/>
+      <stop offset="0.34" stop-color="#f3f6f8"/>
+      <stop offset="0.52" stop-color="#c6ced4"/>
+      <stop offset="0.68" stop-color="#e8edf0"/>
+      <stop offset="0.85" stop-color="#b9c2c9"/>
+      <stop offset="1" stop-color="#d3dade"/>
+    </linearGradient>
+    <linearGradient id="metalBack" x1="0" y1="0" x2="0.4" y2="1">
+      <stop offset="0" stop-color="#b6bfc6"/>
+      <stop offset="0.5" stop-color="#98a3ab"/>
+      <stop offset="1" stop-color="#7d888f"/>
+    </linearGradient>
+    <linearGradient id="edgeMetal" x1="0" y1="0" x2="1" y2="0.6">
+      <stop offset="0" stop-color="#9aa5ac"/>
+      <stop offset="0.5" stop-color="#6f7a81"/>
+      <stop offset="1" stop-color="#59636a"/>
+    </linearGradient>
+    <linearGradient id="curlMetal" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#8c979e"/>
+      <stop offset="0.35" stop-color="#eef2f4"/>
+      <stop offset="0.6" stop-color="#c2cbd1"/>
+      <stop offset="1" stop-color="#9ba5ac"/>
+    </linearGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0"/>
+      <stop offset="0.38" stop-color="#ffffff" stop-opacity="0.55"/>
+      <stop offset="0.46" stop-color="#ffffff" stop-opacity="0.15"/>
+      <stop offset="0.62" stop-color="#ffffff" stop-opacity="0.42"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="anodize" x1="0" y1="0" x2="1" y2="0.3">
+      <stop offset="0" stop-color="#7f8f9c" stop-opacity="0.16"/>
+      <stop offset="0.5" stop-color="#9fb0bd" stop-opacity="0.05"/>
+      <stop offset="1" stop-color="#6f7f8c" stop-opacity="0.18"/>
+    </linearGradient>
+    <filter id="soft" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="7"/>
+    </filter>
+    <filter id="tight" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="2.5"/>
+    </filter>
+    <filter id="brush" x="0%" y="0%" width="100%" height="100%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.9 0.012" numOctaves="3" seed="7" result="n"/>
+      <feColorMatrix in="n" type="saturate" values="0"/>
+      <feComponentTransfer>
+        <feFuncA type="linear" slope="0.16"/>
+      </feComponentTransfer>
+    </filter>
+    <clipPath id="pageClip">
+      <path d="M126 74 L406 74 L406 372 L340 438 L126 438 Z"/>
+    </clipPath>
+
+    <!-- calligraphic MERGEN, broad-nib: thick downstrokes, hairline upstrokes -->
+    <g id="wordmark">
+      <!-- M -->
+      <path d="M0,0 L0,-56" stroke-width="9"/>
+      <path d="M0,-56 L17,-18" stroke-width="8"/>
+      <path d="M17,-18 L34,-56" stroke-width="3.5"/>
+      <path d="M34,-56 L34,0" stroke-width="9"/>
+      <!-- E -->
+      <path d="M46,-56 L46,0" stroke-width="9"/>
+      <path d="M46,-56 L69,-56" stroke-width="4"/>
+      <path d="M46,-30 L63,-30" stroke-width="3.5"/>
+      <path d="M46,0 L70,0" stroke-width="4"/>
+      <!-- R -->
+      <path d="M82,0 L82,-56" stroke-width="9"/>
+      <path d="M82,-56 C100,-56 107,-50 107,-43 C107,-35 99,-30 82,-30" stroke-width="5"/>
+      <path d="M88,-30 L109,0" stroke-width="7"/>
+      <!-- G -->
+      <path d="M154,-42 C150,-53 140,-58 131,-54 C120,-49 116,-37 116,-27 C116,-11 123,2 135,0 C146,-2 152,-10 152,-20" stroke-width="7"/>
+      <path d="M139,-21 L154,-21" stroke-width="4"/>
+      <!-- E -->
+      <path d="M166,-56 L166,0" stroke-width="9"/>
+      <path d="M166,-56 L189,-56" stroke-width="4"/>
+      <path d="M166,-30 L183,-30" stroke-width="3.5"/>
+      <path d="M166,0 L190,0" stroke-width="4"/>
+      <!-- N -->
+      <path d="M202,0 L202,-56" stroke-width="9"/>
+      <path d="M202,-56 L234,0" stroke-width="8"/>
+      <path d="M234,0 L234,-56" stroke-width="9"/>
+      <!-- swash -->
+      <path d="M-6,12 C40,26 100,30 150,22 C186,16 216,10 242,-2" stroke-width="2.5"/>
+    </g>
+  </defs>
+
+  <!-- cast shadow -->
+  <ellipse cx="268" cy="452" rx="150" ry="20" fill="#2b3339" opacity="0.32" filter="url(#soft)"/>
+
+  <!-- stacked plates behind -->
+  <g transform="rotate(-4 256 256)">
+    <rect x="146" y="92" width="268" height="356" rx="4" fill="url(#metalBack)" opacity="0.55"/>
+  </g>
+  <g transform="rotate(-2 256 256)">
+    <rect x="138" y="84" width="272" height="358" rx="4" fill="url(#metalBack)" opacity="0.82"/>
+  </g>
+
+  <!-- shadow under the top plate -->
+  <path d="M126 74 L406 74 L406 438 L126 438 Z" fill="#39434a" opacity="0.38" filter="url(#soft)" transform="translate(6 8)"/>
+
+  <!-- main plate -->
+  <path d="M126 74 L406 74 L406 372 L340 438 L126 438 Z" fill="url(#metal)"/>
+
+  <!-- brushed grain, anodized tint, specular sweep -->
+  <g clip-path="url(#pageClip)">
+    <rect x="126" y="74" width="280" height="364" filter="url(#brush)" opacity="0.5"/>
+    <rect x="126" y="74" width="280" height="364" fill="url(#anodize)"/>
+    <rect x="126" y="74" width="280" height="364" fill="url(#sheen)"/>
+  </g>
+
+  <!-- engraved text lines -->
+  <g clip-path="url(#pageClip)">
+    <g fill="#5d686f" opacity="0.72">
+      <rect x="160" y="128" width="196" height="7" rx="3.5"/>
+      <rect x="160" y="150" width="212" height="5" rx="2.5"/>
+      <rect x="160" y="166" width="205" height="5" rx="2.5"/>
+      <rect x="160" y="182" width="216" height="5" rx="2.5"/>
+      <rect x="160" y="198" width="168" height="5" rx="2.5"/>
+
+      <rect x="160" y="228" width="152" height="6" rx="3"/>
+      <rect x="160" y="248" width="214" height="5" rx="2.5"/>
+      <rect x="160" y="264" width="208" height="5" rx="2.5"/>
+      <rect x="160" y="280" width="217" height="5" rx="2.5"/>
+      <rect x="160" y="296" width="190" height="5" rx="2.5"/>
+    </g>
+    <g fill="#ffffff" opacity="0.55">
+      <rect x="160" y="135" width="196" height="1.5" rx="0.75"/>
+      <rect x="160" y="155" width="212" height="1.5" rx="0.75"/>
+      <rect x="160" y="171" width="205" height="1.5" rx="0.75"/>
+      <rect x="160" y="187" width="216" height="1.5" rx="0.75"/>
+      <rect x="160" y="203" width="168" height="1.5" rx="0.75"/>
+      <rect x="160" y="234" width="152" height="1.5" rx="0.75"/>
+      <rect x="160" y="253" width="214" height="1.5" rx="0.75"/>
+      <rect x="160" y="269" width="208" height="1.5" rx="0.75"/>
+      <rect x="160" y="285" width="217" height="1.5" rx="0.75"/>
+      <rect x="160" y="301" width="190" height="1.5" rx="0.75"/>
+    </g>
+
+    <g stroke="#6d787f" stroke-width="1" opacity="0.4">
+      <line x1="160" y1="214" x2="352" y2="214"/>
+    </g>
+
+    <line x1="146" y1="100" x2="146" y2="416" stroke="#68737a" stroke-width="2" opacity="0.5"/>
+    <line x1="147.5" y1="100" x2="147.5" y2="416" stroke="#ffffff" stroke-width="1" opacity="0.45"/>
+  </g>
+
+  <!-- engraved calligraphic wordmark: white lip under, dark groove over -->
+  <g clip-path="url(#pageClip)" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <g transform="translate(166 376) scale(0.8) skewX(-9) translate(0 2.5)"
+       stroke="#ffffff" opacity="0.5">
+      <use href="#wordmark"/>
+    </g>
+    <g transform="translate(166 376) scale(0.8) skewX(-9)"
+       stroke="#4e5960" opacity="0.88">
+      <use href="#wordmark"/>
+    </g>
+  </g>
+
+  <!-- machined bevels -->
+  <path d="M406 74 L406 372 L396 362 L396 84 Z" fill="url(#edgeMetal)" opacity="0.75"/>
+  <path d="M126 74 L406 74 L396 84 L136 84 Z" fill="#ffffff" opacity="0.62"/>
+  <path d="M126 74 L136 84 L136 428 L126 438 Z" fill="#ffffff" opacity="0.38"/>
+
+  <!-- shadow cast by the curled corner -->
+  <path d="M340 438 L406 372 L406 400 L360 438 Z" fill="#39434a" opacity="0.42" filter="url(#tight)"/>
+
+  <!-- peeled foil corner -->
+  <path d="M340 438 L406 372 C398 412 384 430 340 438 Z" fill="url(#curlMetal)"/>
+  <path d="M340 438 L406 372 C398 412 384 430 340 438 Z" fill="none" stroke="#7b868d" stroke-width="1.25" opacity="0.6"/>
+  <path d="M352 432 L399 385" stroke="#ffffff" stroke-width="2" opacity="0.5" stroke-linecap="round"/>
+
+  <!-- outer contour, medium weight -->
+  <path d="M126 74 L406 74 L406 372 L340 438 L126 438 Z" fill="none" stroke="#5f6a71" stroke-width="2" opacity="0.8"/>
+</svg>

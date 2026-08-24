@@ -1,0 +1,15 @@
+# CMake writes into build/, but build/docs/ is tracked source.
+/build/*
+!/build/docs/
+
+# Package artefacts from makepkg run in-tree.
+/pkg/
+/src-pkg/
+*.pkg.tar.zst
+*.pkg.tar.zst.sig
+
+# Editor and tooling scratch.
+*.swp
+*~
+.cache/
+compile_commands.json
