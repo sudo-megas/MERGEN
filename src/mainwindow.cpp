@@ -784,6 +784,14 @@ QString MainWindow::runCommand(const QString &verb, const QString &argument) {
     const QString ok = QStringLiteral("ok");
     const auto err = [](const QString &why) { return QStringLiteral("err: ") + why; };
 
+    // Belt as well as braces. The print loop already excludes socket notifiers
+    // so nothing should arrive here mid-print, but a command that changed the
+    // document under a running print would corrupt the output silently, and
+    // this costs one comparison.
+    if (m_printing) {
+        return err(QStringLiteral("busy printing"));
+    }
+
     if (verb == QLatin1String("open")) {
         if (argument.isEmpty()) {
             return err(QStringLiteral("open needs a path"));
@@ -1694,6 +1702,9 @@ void MainWindow::printDocument() {
     // window was simply frozen for all of it — measured at 346 s with no
     // repaint and no way out. The dialog gives it back: progress while it
     // works, and a cancel that is actually honoured between pages.
+    m_printing = true;
+    const QScopeGuard printingDone([this] { m_printing = false; });
+
     QProgressDialog progress(tr("Printing…"), tr("Cancel"), from, to + 1, this);
     progress.setWindowModality(Qt::WindowModal);
     progress.setWindowTitle(QFileInfo(m_doc->path()).fileName());

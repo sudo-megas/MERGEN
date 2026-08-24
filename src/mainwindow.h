@@ -224,6 +224,11 @@ private:
 
     /// Guards against re-entering openPath from a nested event loop.
     bool m_opening = false;
+
+    /// Set for the duration of printDocument's page loop, which runs the event
+    /// queue between pages so its progress dialog can paint. Anything that
+    /// would replace the document while that loop is running has to wait.
+    bool m_printing = false;
 };
 
 } // namespace mergen

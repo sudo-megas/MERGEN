@@ -807,7 +807,8 @@ model. A session limit killed seven of them mid-work, but every agent journalled
 continuously, so about 11,000 lines of findings survived rather than being lost
 with the agents.
 
-They produced **52 findings, 19 of them CRITICAL**. Every one was independently
+They produced **51 findings, numbered to V52 with no V42, 19 of them
+CRITICAL**. Every one was independently
 verified before a line was changed — an agent's confident false positive
 "fixed" is a fresh bug, and three of these turned out to be exactly that.
 
@@ -828,13 +829,14 @@ The answer to the freeze question was **no**. Nine commits later it is yes.
 7. **Z11g** — bound the caches, unclamp the fit modes, verify a portal's far end.
 8. **Z11h** — a long print can be watched, and stopped.
 9. **Z11i** — closing during a search waits, rather than aborting.
+10. **Z11j** — and that print loop is not a way back into the document.
 
 Measured, before and after: entering compare on a 1000-page pair 9,100 ms →
 12 ms; document properties 54 ms → 0 ms; five idle socket clients 5.0 s →
 0.000 s; a 1000-page print 346 s frozen → progress bar with a working Cancel.
 
 > [!NOTE]
-> **Amended at Z11.** Three findings were *rejected* after measurement, and the
+> **Amended at Z11.** Two findings were *rejected* after measurement, and the
 > rejections are part of the record. Selection line breaks were reported wrong
 > at every non-zero rotation; they are not, because `setRotation` already clears
 > the word cache and the selection. Cache growth was reported at 73.6 MB over a
@@ -842,7 +844,7 @@ Measured, before and after: entering compare on a 1000-page pair 9,100 ms →
 > cache — only selecting does. The prune was kept anyway, as a bound rather than
 > a repair, and its commit message says so.
 
-The full disposition of all 51 findings — fixed with a commit, ruled, rejected
+The full disposition of all 51 — fixed with a commit, ruled, rejected
 with the evidence, or partial with the reason — is in `docs/audit/DISPOSITION.md`.
 That directory is scratch and is not tracked; this paragraph is the tracked
 record that it existed.
