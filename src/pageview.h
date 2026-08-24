@@ -20,6 +20,14 @@ namespace mergen {
 
 class Document;
 
+/// How the zoom factor is chosen. Fit modes are recomputed on every resize;
+/// Fixed is whatever the user last dialled in.
+enum class ZoomMode {
+    Fixed,
+    FitWidth,
+    FitPage,
+};
+
 /// The scrolling page column. Owns layout, culling, painting and the render
 /// cache; draws the empty state and error text itself rather than raising a
 /// dialog.
@@ -34,6 +42,25 @@ public:
 
     /// Centred text drawn over the empty page area. Cleared by setDocument.
     void setMessage(const QString &text);
+
+    double zoom() const { return m_zoom; }
+    ZoomMode zoomMode() const { return m_zoomMode; }
+
+    void setZoom(double factor);
+    void zoomIn();
+    void zoomOut();
+    void resetZoom();
+    void setFitWidth();
+    void setFitPage();
+    void rotateClockwise();
+    void rotateCounterClockwise();
+
+    static constexpr double kMinZoom = 0.10;
+    static constexpr double kMaxZoom = 10.0;
+    static constexpr double kZoomStep = 0.10;
+
+Q_SIGNALS:
+    void zoomChanged(double factor);
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -53,6 +80,26 @@ private:
     QPoint contentOrigin() const;
     void dropPagesOutside(int first, int last);
 
+    /// A point of the document expressed independently of zoom: which page,
+    /// and where inside it, so that a zoom change can put it back under the
+    /// viewport centre.
+    struct Anchor {
+        int page = -1;
+        double fx = 0.0;
+        double fy = 0.0;
+    };
+    Anchor captureAnchor() const;
+    void restoreAnchor(const Anchor &anchor);
+
+    /// Zoom implied by the current fit mode, the viewport size and the given
+    /// orientation. Returns the existing zoom when the mode is Fixed. Takes
+    /// the rotation explicitly so a pending rotation can be measured before it
+    /// is committed.
+    double zoomForFitMode(Poppler::Page::Rotation rotation) const;
+    /// Applies a new zoom and/or rotation, clearing the cache and holding the
+    /// anchor point steady. Emits zoomChanged when the factor moves.
+    void applyScale(double factor, Poppler::Page::Rotation rotation);
+
     /// Gap between consecutive pages, and the margin around the column, in
     /// device pixels at any zoom.
     static constexpr int kPageGap = 12;
@@ -64,6 +111,7 @@ private:
     QString m_message;
 
     double m_zoom = 1.0;
+    ZoomMode m_zoomMode = ZoomMode::FitWidth;
     Poppler::Page::Rotation m_rotation = Poppler::Page::Rotate0;
 
     /// Page sizes in points, cached once per document so that relayout on

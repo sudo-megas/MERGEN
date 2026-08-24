@@ -261,6 +261,14 @@ below) are rendered. Rendered pages are cached as `QImage` keyed by page index
 and zoom level; the cache is cleared on zoom or rotation change. Scrolling is
 smooth and pixel-based, not stepped.
 
+**Zoom.** Zoom steps snap onto the 10% grid rather than compounding, so
+stepping up from a fit factor of 87% reaches 90% and not 97%. Both fit modes
+size against the largest page in the document rather than the page currently on
+screen, so the factor does not shift as the reader scrolls between pages of
+different sizes, and a fit mode is a standing instruction: it is recomputed on
+every resize until the reader picks an explicit zoom. Fit-width measures against
+the viewport width after the scrollbar has taken its share.
+
 **Selection.** `Poppler::Page::textList()` gives per-word bounding boxes. A
 mouse drag maps viewport coordinates back to page coordinates, selects the words
 whose boxes fall between anchor and cursor, and paints a translucent highlight

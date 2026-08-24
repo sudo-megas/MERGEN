@@ -12,6 +12,9 @@
 #include <QScrollBar>
 #include <QWheelEvent>
 
+#include <cmath>
+#include <limits>
+
 namespace mergen {
 
 PageView::PageView(QWidget *parent) : QAbstractScrollArea(parent) {
@@ -27,6 +30,7 @@ void PageView::setDocument(Document *doc) {
     m_message.clear();
     m_cache.clear();
     m_zoom = 1.0;
+    m_zoomMode = ZoomMode::FitWidth;
     m_rotation = Poppler::Page::Rotate0;
 
     // Page geometry is fixed for the life of the document; ask poppler once.
@@ -39,9 +43,11 @@ void PageView::setDocument(Document *doc) {
         }
     }
 
+    m_zoom = zoomForFitMode(m_rotation);
     relayout();
     verticalScrollBar()->setValue(0);
     horizontalScrollBar()->setValue(0);
+    Q_EMIT zoomChanged(m_zoom);
     viewport()->update();
 }
 
@@ -194,7 +200,22 @@ void PageView::paintEmptyState(QPainter &painter) {
 
 void PageView::resizeEvent(QResizeEvent *event) {
     QAbstractScrollArea::resizeEvent(event);
-    relayout();
+    if (m_zoomMode == ZoomMode::Fixed) {
+        relayout();
+        return;
+    }
+    // A fit mode is a standing instruction, not a one-shot: recompute it.
+    const double refitted = zoomForFitMode(m_rotation);
+    if (!qFuzzyCompare(refitted, m_zoom)) {
+        const Anchor anchor = captureAnchor();
+        m_zoom = refitted;
+        m_cache.clear();
+        relayout();
+        restoreAnchor(anchor);
+        Q_EMIT zoomChanged(m_zoom);
+    } else {
+        relayout();
+    }
 }
 
 void PageView::scrollContentsBy(int dx, int dy) {
@@ -233,6 +254,13 @@ void PageView::keyPressEvent(QKeyEvent *event) {
     case Qt::Key_Left:
         hbar->setValue(hbar->value() - hbar->singleStep());
         return;
+    case Qt::Key_F:
+        if (event->modifiers() & Qt::ShiftModifier) {
+            setFitPage();
+        } else if (event->modifiers() == Qt::NoModifier) {
+            setFitWidth();
+        }
+        return;
     default:
         break;
     }
@@ -240,7 +268,158 @@ void PageView::keyPressEvent(QKeyEvent *event) {
 }
 
 void PageView::wheelEvent(QWheelEvent *event) {
+    if (event->modifiers() & Qt::ControlModifier) {
+        const int delta = event->angleDelta().y();
+        if (delta > 0) {
+            zoomIn();
+        } else if (delta < 0) {
+            zoomOut();
+        }
+        event->accept();
+        return;
+    }
     QAbstractScrollArea::wheelEvent(event);
+}
+
+double PageView::zoomForFitMode(Poppler::Page::Rotation rotation) const {
+    if (m_zoomMode == ZoomMode::Fixed || m_pageSizes.isEmpty()) {
+        return m_zoom;
+    }
+
+    const bool quarterTurn =
+        rotation == Poppler::Page::Rotate90 || rotation == Poppler::Page::Rotate270;
+
+    // Both fit modes size against the largest page, so the result does not
+    // shift as the reader scrolls between differently sized pages.
+    double widest = 0.0;
+    double tallest = 0.0;
+    for (QSizeF points : m_pageSizes) {
+        if (quarterTurn) {
+            points.transpose();
+        }
+        widest = qMax(widest, points.width());
+        tallest = qMax(tallest, points.height());
+    }
+    if (widest <= 0.0 || tallest <= 0.0) {
+        return m_zoom;
+    }
+
+    const QSize view = viewport()->size();
+    const double usableWidth = qMax(1, view.width() - 2 * kPageGap);
+    double factor = usableWidth / widest;
+
+    if (m_zoomMode == ZoomMode::FitPage) {
+        const double usableHeight = qMax(1, view.height() - 2 * kPageGap);
+        factor = qMin(factor, usableHeight / tallest);
+    }
+
+    return qBound(kMinZoom, factor, kMaxZoom);
+}
+
+PageView::Anchor PageView::captureAnchor() const {
+    Anchor anchor;
+    if (m_layout.isEmpty()) {
+        return anchor;
+    }
+
+    const int centreY = verticalScrollBar()->value() + viewport()->height() / 2;
+    const int centreX = m_content.width() <= viewport()->width()
+                            ? m_content.width() / 2
+                            : horizontalScrollBar()->value() + viewport()->width() / 2;
+
+    // The page holding the centre, or the nearest one when the centre falls in
+    // an inter-page gap.
+    int best = 0;
+    int bestDistance = std::numeric_limits<int>::max();
+    for (int i = 0; i < m_layout.size(); ++i) {
+        const QRect &r = m_layout.at(i);
+        const int distance = centreY < r.top()      ? r.top() - centreY
+                             : centreY > r.bottom() ? centreY - r.bottom()
+                                                    : 0;
+        if (distance < bestDistance) {
+            bestDistance = distance;
+            best = i;
+            if (distance == 0) {
+                break;
+            }
+        }
+    }
+
+    const QRect &page = m_layout.at(best);
+    anchor.page = best;
+    anchor.fx = page.width() > 0 ? double(centreX - page.left()) / page.width() : 0.0;
+    anchor.fy = page.height() > 0 ? double(centreY - page.top()) / page.height() : 0.0;
+    return anchor;
+}
+
+void PageView::restoreAnchor(const Anchor &anchor) {
+    if (anchor.page < 0 || anchor.page >= m_layout.size()) {
+        return;
+    }
+    const QRect &page = m_layout.at(anchor.page);
+    const int targetY = page.top() + qRound(anchor.fy * page.height());
+    const int targetX = page.left() + qRound(anchor.fx * page.width());
+    verticalScrollBar()->setValue(targetY - viewport()->height() / 2);
+    horizontalScrollBar()->setValue(targetX - viewport()->width() / 2);
+}
+
+void PageView::applyScale(double factor, Poppler::Page::Rotation rotation) {
+    const double clamped = qBound(kMinZoom, factor, kMaxZoom);
+    if (qFuzzyCompare(clamped, m_zoom) && rotation == m_rotation) {
+        return;
+    }
+
+    const Anchor anchor = captureAnchor();
+    m_zoom = clamped;
+    m_rotation = rotation;
+    // Every cached image is at the old scale and orientation.
+    m_cache.clear();
+    relayout();
+    restoreAnchor(anchor);
+    Q_EMIT zoomChanged(m_zoom);
+    viewport()->update();
+}
+
+void PageView::setZoom(double factor) {
+    m_zoomMode = ZoomMode::Fixed;
+    applyScale(factor, m_rotation);
+}
+
+void PageView::zoomIn() {
+    // Snap onto the 10% grid so a fit zoom of 87% steps to 90%, not 97%.
+    const double stepped = std::floor(m_zoom / kZoomStep + 1e-6) * kZoomStep + kZoomStep;
+    setZoom(stepped);
+}
+
+void PageView::zoomOut() {
+    const double stepped = std::ceil(m_zoom / kZoomStep - 1e-6) * kZoomStep - kZoomStep;
+    setZoom(stepped);
+}
+
+void PageView::resetZoom() {
+    setZoom(1.0);
+}
+
+void PageView::setFitWidth() {
+    m_zoomMode = ZoomMode::FitWidth;
+    applyScale(zoomForFitMode(m_rotation), m_rotation);
+}
+
+void PageView::setFitPage() {
+    m_zoomMode = ZoomMode::FitPage;
+    applyScale(zoomForFitMode(m_rotation), m_rotation);
+}
+
+void PageView::rotateClockwise() {
+    const auto next = Poppler::Page::Rotation((int(m_rotation) + 1) % 4);
+    // Rotating changes which dimension a fit mode measures against, so the
+    // new orientation is priced in before it is committed.
+    applyScale(m_zoomMode == ZoomMode::Fixed ? m_zoom : zoomForFitMode(next), next);
+}
+
+void PageView::rotateCounterClockwise() {
+    const auto next = Poppler::Page::Rotation((int(m_rotation) + 3) % 4);
+    applyScale(m_zoomMode == ZoomMode::Fixed ? m_zoom : zoomForFitMode(next), next);
 }
 
 } // namespace mergen
