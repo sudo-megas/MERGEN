@@ -10,6 +10,7 @@
 #include <functional>
 
 class QLocalServer;
+class QLocalSocket;
 
 namespace mergen {
 
@@ -53,9 +54,16 @@ public:
 
 private:
     void onConnection();
+    void onReadyRead(QLocalSocket *client);
 
     QLocalServer *m_server = nullptr;
     Handler m_handler;
+
+    /// A command can enter a nested event loop (the password prompt, the
+    /// pkexec dialog), during which this server keeps accepting. Without this
+    /// a second command re-enters the handler while the first is still on the
+    /// stack — MZ.md §9.
+    bool m_busy = false;
 };
 
 } // namespace mergen
