@@ -28,6 +28,24 @@ struct Word {
     bool spaceAfter = false;
 };
 
+/// One labelled row of the properties overlay.
+struct Property {
+    QString name;
+    QString value;
+};
+
+/// What a document says about itself, and what it does not advertise.
+///
+/// The warnings are the point of this being here at all: a PDF can carry
+/// JavaScript, form fields and attached files, and nothing in a viewer's normal
+/// surface tells the reader so. MERGEN does not run any of it — it has no
+/// JavaScript engine and \ref MZ.md §5 bans form filling outright — but a
+/// reader deserves to know a page is carrying more than ink.
+struct DocumentProperties {
+    QVector<Property> rows;
+    QStringList warnings;
+};
+
 /// Why a load attempt did not produce a usable document.
 enum class LoadStatus {
     Ok,
@@ -70,6 +88,11 @@ public:
     QByteArray data() const { return m_data; }
 
     int pageCount() const;
+
+    /// Metadata, permissions and the security warnings described on
+    /// \ref DocumentProperties. Gathered on demand, never at open time: it
+    /// walks the font table, which is work no reader asked for until they ask.
+    DocumentProperties properties() const;
 
     /// Page size in points (1/72 inch), before rotation is applied.
     QSizeF pageSize(int index) const;

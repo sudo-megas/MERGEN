@@ -4,7 +4,9 @@
 
 #include "document.h"
 
+#include <QDateTime>
 #include <QFileInfo>
+#include <QLocale>
 #include <utility>
 
 namespace mergen {
@@ -101,6 +103,112 @@ void Document::close() {
 
 int Document::pageCount() const {
     return m_doc ? m_doc->numPages() : 0;
+}
+
+DocumentProperties Document::properties() const {
+    DocumentProperties out;
+    if (!m_doc) {
+        return out;
+    }
+
+    const auto row = [&out](const QString &name, const QString &value) {
+        if (!value.isEmpty()) {
+            out.rows.append({name, value});
+        }
+    };
+
+    row(QStringLiteral("File"), QFileInfo(m_path).fileName());
+
+    // Only the keys the document actually carries, in a fixed order rather than
+    // poppler's, so two documents describe themselves the same way.
+    for (const auto &key :
+         {QStringLiteral("Title"), QStringLiteral("Subject"), QStringLiteral("Author"),
+          QStringLiteral("Keywords"), QStringLiteral("Creator"), QStringLiteral("Producer")}) {
+        row(key, m_doc->info(key).simplified());
+    }
+
+    const QLocale locale;
+    for (const auto &pair : {std::pair{QStringLiteral("CreationDate"), QStringLiteral("Created")},
+                             std::pair{QStringLiteral("ModDate"), QStringLiteral("Modified")}}) {
+        const QDateTime when = m_doc->date(pair.first);
+        if (when.isValid()) {
+            row(pair.second, locale.toString(when, QLocale::ShortFormat));
+        }
+    }
+
+    const Poppler::Document::PdfVersion version = m_doc->getPdfVersion();
+    row(QStringLiteral("PDF version"),
+        QStringLiteral("%1.%2").arg(version.major).arg(version.minor));
+    row(QStringLiteral("Pages"), QString::number(m_doc->numPages()));
+
+    if (m_doc->numPages() > 0) {
+        const QSizeF size = pageSize(0);
+        if (size.isValid()) {
+            // Points are the document's own unit; millimetres are the one the
+            // reader owns a ruler for.
+            row(QStringLiteral("Page size"),
+                QStringLiteral("%1 x %2 pt  (%3 x %4 mm)")
+                    .arg(QString::number(size.width(), 'f', 0),
+                         QString::number(size.height(), 'f', 0),
+                         QString::number(size.width() * 25.4 / 72.0, 'f', 0),
+                         QString::number(size.height() * 25.4 / 72.0, 'f', 0)));
+        }
+    }
+
+    row(QStringLiteral("Encrypted"),
+        m_doc->isEncrypted() ? QStringLiteral("yes") : QStringLiteral("no"));
+    row(QStringLiteral("Linearized"),
+        m_doc->isLinearized() ? QStringLiteral("yes") : QStringLiteral("no"));
+
+    // Only what is withheld is worth listing: a document that allows everything
+    // says so in one word instead of seven.
+    QStringList denied;
+    if (!m_doc->okToPrint()) {
+        denied << QStringLiteral("print");
+    }
+    if (!m_doc->okToCopy()) {
+        denied << QStringLiteral("copy text");
+    }
+    if (!m_doc->okToChange()) {
+        denied << QStringLiteral("modify");
+    }
+    if (!m_doc->okToAddNotes()) {
+        denied << QStringLiteral("annotate");
+    }
+    if (!m_doc->okToExtractForAccessibility()) {
+        denied << QStringLiteral("extract for accessibility");
+    }
+    row(QStringLiteral("Restrictions"),
+        denied.isEmpty() ? QStringLiteral("none") : denied.join(QStringLiteral(", ")));
+
+    const QList<Poppler::FontInfo> fonts = m_doc->fonts();
+    if (!fonts.isEmpty()) {
+        int embedded = 0;
+        for (const Poppler::FontInfo &font : fonts) {
+            if (font.isEmbedded()) {
+                ++embedded;
+            }
+        }
+        row(QStringLiteral("Fonts"),
+            QStringLiteral("%1 (%2 embedded)")
+                .arg(QString::number(fonts.size()), QString::number(embedded)));
+    }
+
+    // The part a viewer normally keeps to itself.
+    if (!m_doc->scripts().isEmpty()) {
+        out.warnings << QStringLiteral(
+            "This document carries embedded JavaScript. MERGEN never runs it.");
+    }
+    if (m_doc->formType() != Poppler::Document::NoForm) {
+        out.warnings << QStringLiteral(
+            "This document contains form fields. MERGEN does not fill forms.");
+    }
+    if (m_doc->hasEmbeddedFiles()) {
+        out.warnings << QStringLiteral(
+            "This document has files attached to it. MERGEN does not open them.");
+    }
+
+    return out;
 }
 
 QSizeF Document::pageSize(int index) const {

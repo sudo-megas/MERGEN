@@ -29,6 +29,7 @@ class QToolButton;
 namespace mergen {
 
 class Document;
+class Overlay;
 class PageView;
 class SearchWorker;
 
@@ -68,6 +69,7 @@ private:
     void showError(const QString &message);
 
     // Actions.
+    void showProperties();
     void printDocument();
     void showAbout();
     void chooseFile();
@@ -108,6 +110,7 @@ private:
 
     std::unique_ptr<Document> m_doc;
     PageView *m_view = nullptr;
+    Overlay *m_overlay = nullptr;
     QToolBar *m_toolBar = nullptr;
 
     QAction *m_openAction = nullptr;

@@ -5,6 +5,7 @@
 #include "mainwindow.h"
 #include "document.h"
 #include "iconset.h"
+#include "overlay.h"
 #include "pageview.h"
 #include "license.h"
 
@@ -34,6 +35,7 @@
 #include <QPrinter>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QGridLayout>
 #include <QStyleOptionToolButton>
 #include <QStylePainter>
 #include <QThread>
@@ -197,6 +199,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     column->setSpacing(0);
 
     m_view = new PageView(central);
+    m_overlay = new Overlay(m_view);
     buildSearchBar();
     column->addWidget(m_searchBar);
     column->addWidget(m_view, 1);
@@ -328,7 +331,16 @@ void MainWindow::buildToolBar() {
 
     auto *closeSearchAction = new QAction(this);
     closeSearchAction->setShortcut(QKeySequence(QStringLiteral("Esc")));
-    connect(closeSearchAction, &QAction::triggered, this, &MainWindow::closeSearch);
+    connect(closeSearchAction, &QAction::triggered, this, [this] {
+        // Innermost first: a window-wide Esc is dispatched before the focused
+        // widget sees it, so the overlay cannot close itself from its own key
+        // handler while this exists.
+        if (m_overlay && m_overlay->isPresented()) {
+            m_overlay->dismiss();
+            return;
+        }
+        closeSearch();
+    });
     addAction(closeSearchAction);
 
     // Enter and Shift+Enter are deliberately not window-wide shortcuts: Qt
@@ -336,6 +348,11 @@ void MainWindow::buildToolBar() {
     // Return would swallow Enter in the page counter and the search field.
     // They are handled where focus actually is — in the page view's key
     // handler and in the search field's event filter.
+
+    auto *propertiesAction = new QAction(this);
+    propertiesAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+I")));
+    connect(propertiesAction, &QAction::triggered, this, &MainWindow::showProperties);
+    addAction(propertiesAction);
 
     // About has no toolbar button: §5 fixes the toolbar's contents, so it is
     // reached by the conventional help key instead.
@@ -486,6 +503,9 @@ void MainWindow::showError(const QString &message) {
 }
 
 void MainWindow::closeDocument(const QString &message) {
+    if (m_overlay) {
+        m_overlay->dismiss();
+    }
     m_doc->close();
     m_view->setDocument(nullptr);
     m_view->setNotice(QString());
@@ -631,6 +651,52 @@ void MainWindow::watchDocument(const QString &path) {
 }
 
 // --- Printing --------------------------------------------------------------
+
+void MainWindow::showProperties() {
+    if (!m_doc || !m_doc->isOpen()) {
+        return;
+    }
+
+    const DocumentProperties props = m_doc->properties();
+
+    auto *content = new QWidget;
+    auto *grid = new QGridLayout(content);
+    grid->setContentsMargins(0, 0, 0, 0);
+    grid->setHorizontalSpacing(18);
+    grid->setVerticalSpacing(6);
+
+    int line = 0;
+    for (const Property &property : props.rows) {
+        auto *name = new QLabel(property.name, content);
+        // The same dimmed role the page view already uses for its own quiet
+        // text, so the two agree without a colour being named here.
+        QPalette dim = name->palette();
+        dim.setColor(QPalette::WindowText, dim.color(QPalette::PlaceholderText));
+        name->setPalette(dim);
+        name->setAlignment(Qt::AlignRight | Qt::AlignTop);
+
+        auto *value = new QLabel(property.value, content);
+        value->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        value->setWordWrap(true);
+
+        grid->addWidget(name, line, 0);
+        grid->addWidget(value, line, 1);
+        ++line;
+    }
+
+    for (const QString &warning : props.warnings) {
+        auto *label = new QLabel(warning, content);
+        label->setWordWrap(true);
+        QFont bold = label->font();
+        bold.setBold(true);
+        label->setFont(bold);
+        grid->addWidget(label, line, 0, 1, 2);
+        ++line;
+    }
+
+    grid->setColumnStretch(1, 1);
+    m_overlay->present(tr("Document properties"), content);
+}
 
 void MainWindow::printDocument() {
     if (!m_doc->isOpen()) {

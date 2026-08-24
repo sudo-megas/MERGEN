@@ -46,7 +46,9 @@ add_executable(mergen
     src/document.cpp
     src/document.h
     src/iconset.cpp
-    src/iconset.h)
+    src/iconset.h
+    src/overlay.cpp
+    src/overlay.h)
 
 target_compile_definitions(mergen PRIVATE
     MERGEN_VERSION="${PROJECT_VERSION}"
