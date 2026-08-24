@@ -5,7 +5,7 @@
 cmake_minimum_required(VERSION 3.25)
 
 project(mergen
-    VERSION 2.0.4
+    VERSION 2.0.5
     DESCRIPTION "A minimal PDF viewer"
     HOMEPAGE_URL "https://github.com/sudo-megas/MERGEN"
     LANGUAGES CXX)
@@ -36,8 +36,35 @@ set(MERGEN_RELEASE_DATE "2026-08-25" CACHE STRING "Date shown in the About dialo
 
 # The privileged reader lives beside the binary, not on PATH, and is never
 # installed setuid: polkit decides, not the filesystem.
-set(MERGEN_HELPER_PATH "${CMAKE_INSTALL_FULL_LIBDIR}/mergen/mergen-open"
-    CACHE STRING "Installed path of the privileged PDF reader")
+#
+# This path is named in three places that must agree: the binary invokes it
+# under pkexec, the generated policy authorises exactly it, and install() puts
+# the helper there. It is deliberately NOT `set(... CACHE ...)` with a computed
+# default — that form assigns only when the variable is absent from the cache,
+# so reconfiguring an existing build tree with a different prefix keeps the old
+# value while install() quietly moves the file. The binary and the policy then
+# agree with each other about a path where no helper exists, pkexec fails on a
+# missing file, and the reader is told the document "cannot be read": the dead
+# end 2.0.2 was about, reached a different way. Nothing warns, and because no
+# compile flag changed, ninja reports "no work to do" over the top of it.
+#
+# Recomputed every configure instead. An explicit -DMERGEN_HELPER_PATH still
+# wins, because that lands in the cache before this runs.
+if(NOT MERGEN_HELPER_PATH)
+    set(MERGEN_HELPER_PATH "${CMAKE_INSTALL_FULL_LIBDIR}/mergen/mergen-open")
+endif()
+
+# A tree configured before the above was written still holds the stale cached
+# value, and an explicit override may simply be wrong. Say so either way: the
+# helper is installed at the second path, and polkit will only authorise the
+# first.
+if(NOT MERGEN_HELPER_PATH STREQUAL "${CMAKE_INSTALL_FULL_LIBDIR}/mergen/mergen-open")
+    message(WARNING
+        "MERGEN_HELPER_PATH is ${MERGEN_HELPER_PATH}, but install() puts the helper at "
+        "${CMAKE_INSTALL_FULL_LIBDIR}/mergen/mergen-open. The binary and the polkit policy "
+        "will name the first; the file will be at the second, and elevation will fail. "
+        "Configure a fresh build directory, or pass -DMERGEN_HELPER_PATH to match.")
+endif()
 
 add_executable(mergen
     src/main.cpp

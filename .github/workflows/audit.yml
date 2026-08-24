@@ -39,3 +39,9 @@ jobs:
 
       - name: Colours
         run: bash scripts/audit-colours.sh
+
+      # The binary, the polkit action and install() must name one helper. They
+      # drifted once, silently, and elevation fails on a missing file when they
+      # do — see the comment above MERGEN_HELPER_PATH in CMakeLists.txt.
+      - name: Privileged helper path
+        run: bash scripts/audit-policy.sh build
