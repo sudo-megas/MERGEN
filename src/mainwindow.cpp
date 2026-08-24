@@ -258,8 +258,23 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
 MainWindow::~MainWindow() {
     cancelSearch();
     if (m_searchThread) {
+        // cancelSearch() above already set the worker's own flag; QThread's
+        // interruption request would be read by nobody.
         m_searchThread->quit();
-        m_searchThread->wait(3000);
+        // The bounded wait was the bug, not the safety net. SearchWorker checks
+        // its cancel flag between pages, so one heavy page offers no
+        // cancellation point and three seconds can expire with the thread still
+        // running — after which ~QObject destroys a running QThread, which Qt
+        // answers with qFatal. An abort on close, on a Release build, reported
+        // by two parties.
+        //
+        // So the choice is not "wait three seconds or give up". It is wait, or
+        // abort. Try the bounded wait first because it almost always suffices,
+        // then wait properly: the remaining delay is one page's search, and a
+        // window that takes a moment to close beats a window that crashes.
+        if (!m_searchThread->wait(3000)) {
+            m_searchThread->wait();
+        }
     }
 }
 
