@@ -20,7 +20,14 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
+#include <QEvent>
 #include <QEventLoop>
+#include <QHBoxLayout>
+#include <QKeyEvent>
+#include <QProgressBar>
+#include <QPushButton>
+#include <QThread>
+#include <QVBoxLayout>
 #include <QProcess>
 #include <QSaveFile>
 #include <QToolBar>
@@ -41,6 +48,7 @@ constexpr char16_t kGlyphFitPage = u'';
 constexpr char16_t kGlyphRotate = u'';
 constexpr char16_t kGlyphSearch = u'';
 constexpr char16_t kGlyphPrint = u'';
+constexpr char16_t kGlyphClose = u'';
 
 constexpr int kRecentLimit = 10;
 
@@ -138,8 +146,16 @@ QString tomlUnescape(const QString &in) {
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     m_doc = std::make_unique<Document>();
 
-    m_view = new PageView(this);
-    setCentralWidget(m_view);
+    auto *central = new QWidget(this);
+    auto *column = new QVBoxLayout(central);
+    column->setContentsMargins(0, 0, 0, 0);
+    column->setSpacing(0);
+
+    m_view = new PageView(central);
+    buildSearchBar();
+    column->addWidget(m_searchBar);
+    column->addWidget(m_view, 1);
+    setCentralWidget(central);
 
     m_watcher = new QFileSystemWatcher(this);
     connect(m_watcher, &QFileSystemWatcher::fileChanged, this, [this](const QString &) {
@@ -148,6 +164,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     });
     connect(m_view, &PageView::noticeClicked, this, &MainWindow::reloadDocument);
     connect(m_view, &PageView::pageChanged, this, &MainWindow::onPageChanged);
+    connect(m_view, &PageView::searchHitsChanged, this, [this](int, int) { updateSearchStatus(); });
 
     loadRecent();
     buildToolBar();
@@ -155,7 +172,13 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     onPageChanged(-1);
 }
 
-MainWindow::~MainWindow() = default;
+MainWindow::~MainWindow() {
+    cancelSearch();
+    if (m_searchThread) {
+        m_searchThread->quit();
+        m_searchThread->wait(3000);
+    }
+}
 
 QToolButton *MainWindow::addGlyphAction(QAction *action, const QString &glyphText,
                                         const QString &label) {
@@ -211,6 +234,7 @@ void MainWindow::buildToolBar() {
 
     m_searchAction = new QAction(this);
     m_searchAction->setShortcut(QKeySequence::Find);
+    connect(m_searchAction, &QAction::triggered, this, &MainWindow::openSearch);
     addGlyphAction(m_searchAction, glyph(kGlyphSearch), tr("Search"));
 
     m_printAction = new QAction(this);
@@ -229,6 +253,22 @@ void MainWindow::buildToolBar() {
     resetZoomAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+0")));
     connect(resetZoomAction, &QAction::triggered, m_view, &PageView::resetZoom);
     addAction(resetZoomAction);
+
+    auto *copyAction = new QAction(this);
+    copyAction->setShortcut(QKeySequence::Copy);
+    connect(copyAction, &QAction::triggered, m_view, &PageView::copySelection);
+    addAction(copyAction);
+
+    auto *closeSearchAction = new QAction(this);
+    closeSearchAction->setShortcut(QKeySequence(QStringLiteral("Esc")));
+    connect(closeSearchAction, &QAction::triggered, this, &MainWindow::closeSearch);
+    addAction(closeSearchAction);
+
+    // Enter and Shift+Enter are deliberately not window-wide shortcuts: Qt
+    // dispatches shortcuts before the focused widget sees the key, so a global
+    // Return would swallow Enter in the page counter and the search field.
+    // They are handled where focus actually is — in the page view's key
+    // handler and in the search field's event filter.
 
     m_quitAction = new QAction(this);
     m_quitAction->setShortcut(QKeySequence::Quit);
@@ -303,6 +343,7 @@ void MainWindow::openPath(const QString &path) {
         return;
     }
 
+    closeSearch();
     m_view->setDocument(m_doc.get());
     m_view->setNotice(QString());
     updateTitle();
@@ -458,6 +499,193 @@ void MainWindow::watchDocument(const QString &path) {
         // is not watched. The reload notice simply never appears — see §5.
         m_watcher->addPath(path);
     }
+}
+
+
+// --- Search ----------------------------------------------------------------
+
+void MainWindow::buildSearchBar() {
+    m_searchBar = new QWidget(centralWidget() ? centralWidget() : this);
+    auto *row = new QHBoxLayout(m_searchBar);
+    row->setContentsMargins(6, 4, 6, 4);
+    row->setSpacing(6);
+
+    m_searchEdit = new QLineEdit(m_searchBar);
+    m_searchEdit->setPlaceholderText(tr("Find in document"));
+    m_searchEdit->installEventFilter(this);
+    connect(m_searchEdit, &QLineEdit::returnPressed, this, [this] {
+        if (m_searchEdit->text().isEmpty()) {
+            return;
+        }
+        // Re-running the same needle means "next hit", not "search again".
+        if (m_view->searchHitCount() > 0 && !m_searchWorker) {
+            m_view->nextSearchHit();
+        } else {
+            startSearch();
+        }
+    });
+    row->addWidget(m_searchEdit, 1);
+
+    // Thin, and only present while a pass is running.
+    m_searchProgress = new QProgressBar(m_searchBar);
+    m_searchProgress->setTextVisible(false);
+    m_searchProgress->setFixedHeight(4);
+    m_searchProgress->setFixedWidth(120);
+    m_searchProgress->hide();
+    row->addWidget(m_searchProgress);
+
+    m_searchCancel = new QPushButton(m_searchBar);
+    m_searchCancel->setFont(glyphFont());
+    m_searchCancel->setText(glyph(kGlyphClose) + QStringLiteral("  ") + tr("Cancel"));
+    m_searchCancel->setFlat(true);
+    m_searchCancel->hide();
+    connect(m_searchCancel, &QPushButton::clicked, this, [this] {
+        // The button keeps whatever was found; only Esc clears.
+        cancelSearch();
+        updateSearchStatus();
+    });
+    row->addWidget(m_searchCancel);
+
+    m_searchStatus = new QLabel(m_searchBar);
+    row->addWidget(m_searchStatus);
+
+    m_searchBar->hide();
+}
+
+void MainWindow::openSearch() {
+    if (!m_doc->isOpen()) {
+        return;
+    }
+    m_searchBar->show();
+    m_searchEdit->setFocus();
+    m_searchEdit->selectAll();
+}
+
+void MainWindow::closeSearch() {
+    cancelSearch();
+    m_view->clearSearchHits();
+    m_searchBar->hide();
+    m_searchProgress->hide();
+    m_searchCancel->hide();
+    m_view->setFocus();
+}
+
+void MainWindow::startSearch() {
+    cancelSearch();
+    m_view->clearSearchHits();
+
+    const QString needle = m_searchEdit->text();
+    if (needle.isEmpty() || !m_doc->isOpen()) {
+        updateSearchStatus();
+        return;
+    }
+
+    if (!m_searchThread) {
+        m_searchThread = new QThread(this);
+        m_searchThread->start();
+    }
+
+    auto *worker = new SearchWorker(m_doc->path(), m_doc->data(), needle);
+    worker->moveToThread(m_searchThread);
+    connect(worker, &SearchWorker::hitFound, this, &MainWindow::onSearchHit);
+    connect(worker, &SearchWorker::progress, this, &MainWindow::onSearchProgress);
+    connect(worker, &SearchWorker::done, this, &MainWindow::onSearchDone);
+    // Receiver is the worker itself, so this survives the disconnect in
+    // cancelSearch() and the worker still cleans itself up.
+    connect(worker, &SearchWorker::done, worker, &QObject::deleteLater);
+    m_searchWorker = worker;
+
+    m_searchProgress->setRange(0, 100);
+    m_searchProgress->setValue(0);
+    m_searchProgress->show();
+    m_searchCancel->show();
+    updateSearchStatus();
+
+    QMetaObject::invokeMethod(worker, "run", Qt::QueuedConnection);
+}
+
+void MainWindow::cancelSearch() {
+    if (!m_searchWorker) {
+        return;
+    }
+    // Detach first: hits already queued from the old pass must not land in the
+    // new one's result list.
+    disconnect(m_searchWorker, nullptr, this, nullptr);
+    m_searchWorker->cancel();
+    m_searchWorker = nullptr;
+    m_searchProgress->hide();
+    m_searchCancel->hide();
+}
+
+// Disconnecting a worker does not discard the signals it has already queued
+// across the thread boundary, so a replaced pass can still deliver hits after
+// the new one has cleared the list. Everything the worker sends is therefore
+// checked against the pass that is actually current.
+void MainWindow::onSearchHit(int page, const QRectF &rect) {
+    if (sender() != m_searchWorker) {
+        return;
+    }
+    m_view->addSearchHit(page, rect);
+}
+
+void MainWindow::onSearchProgress(int page, int total) {
+    if (sender() != m_searchWorker) {
+        return;
+    }
+    if (total > 0) {
+        m_searchProgress->setValue(page * 100 / total);
+    }
+    updateSearchStatus();
+}
+
+void MainWindow::onSearchDone(bool cancelled) {
+    Q_UNUSED(cancelled);
+    if (sender() != m_searchWorker) {
+        return;
+    }
+    m_searchWorker = nullptr;
+    m_searchProgress->hide();
+    m_searchCancel->hide();
+    updateSearchStatus();
+}
+
+void MainWindow::updateSearchStatus() {
+    const int count = m_view->searchHitCount();
+    if (count == 0) {
+        m_searchStatus->setText(m_searchWorker ? tr("Searching…") : tr("No hits"));
+        return;
+    }
+    const int current = m_view->currentSearchHit();
+    m_searchStatus->setText(m_searchWorker
+                                ? tr("%1 of %2 so far").arg(current + 1).arg(count)
+                                : tr("%1 of %2").arg(current + 1).arg(count));
+}
+
+bool MainWindow::eventFilter(QObject *watched, QEvent *event) {
+    if (watched == m_searchEdit && event->type() == QEvent::KeyPress) {
+        auto *key = static_cast<QKeyEvent *>(event);
+        if (key->key() == Qt::Key_Escape) {
+            closeSearch();
+            return true;
+        }
+        if ((key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter) &&
+            (key->modifiers() & Qt::ShiftModifier)) {
+            m_view->previousSearchHit();
+            updateSearchStatus();
+            return true;
+        }
+        if (key->key() == Qt::Key_Down) {
+            m_view->nextSearchHit();
+            updateSearchStatus();
+            return true;
+        }
+        if (key->key() == Qt::Key_Up) {
+            m_view->previousSearchHit();
+            updateSearchStatus();
+            return true;
+        }
+    }
+    return QMainWindow::eventFilter(watched, event);
 }
 
 QString MainWindow::recentFilePath() {

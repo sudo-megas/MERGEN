@@ -6,6 +6,8 @@
 #include "document.h"
 
 #include <QKeyEvent>
+#include <QClipboard>
+#include <QGuiApplication>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPaintEvent>
@@ -30,6 +32,11 @@ void PageView::setDocument(Document *doc) {
     m_doc = doc;
     m_message.clear();
     m_cache.clear();
+    m_words.clear();
+    m_hits.clear();
+    m_currentHit = -1;
+    m_selectionAnchor = Position();
+    m_selectionCursor = Position();
     m_zoom = 1.0;
     m_zoomMode = ZoomMode::FitWidth;
     m_rotation = Poppler::Page::Rotate0;
@@ -220,6 +227,8 @@ void PageView::paintEvent(QPaintEvent *event) {
             continue;
         }
         painter.drawImage(target.topLeft(), image);
+        paintSelection(painter, i, origin);
+        paintSearchHits(painter, i, origin);
     }
 
     paintNotice(painter);
@@ -256,7 +265,305 @@ void PageView::mousePressEvent(QMouseEvent *event) {
         event->accept();
         return;
     }
+    if (event->button() == Qt::LeftButton && !m_layout.isEmpty()) {
+        const Position position = positionAt(event->position().toPoint());
+        m_selectionAnchor = position;
+        m_selectionCursor = position;
+        m_dragging = true;
+        viewport()->update();
+        event->accept();
+        return;
+    }
     QAbstractScrollArea::mousePressEvent(event);
+}
+
+
+// --- Coordinate mapping ----------------------------------------------------
+//
+// Poppler returns text boxes and search rects in the *rotated* page space at
+// 72 dpi, the same space renderToImage produces its pixels in. So one scale
+// factor maps between page points and content pixels at any rotation, and no
+// per-rotation special case is needed here.
+
+QPointF PageView::toPageSpace(int page, const QPoint &viewportPoint) const {
+    if (page < 0 || page >= m_layout.size() || m_zoom <= 0.0) {
+        return QPointF();
+    }
+    const QRect rect = m_layout.at(page).translated(contentOrigin());
+    return QPointF((viewportPoint.x() - rect.left()) / m_zoom,
+                   (viewportPoint.y() - rect.top()) / m_zoom);
+}
+
+QRect PageView::fromPageSpace(int page, const QRectF &pageRect) const {
+    if (page < 0 || page >= m_layout.size()) {
+        return QRect();
+    }
+    const QRect rect = m_layout.at(page);
+    return QRectF(rect.left() + pageRect.x() * m_zoom, rect.top() + pageRect.y() * m_zoom,
+                  pageRect.width() * m_zoom, pageRect.height() * m_zoom)
+        .toAlignedRect();
+}
+
+const QVector<Word> &PageView::wordsOf(int page) {
+    auto it = m_words.find(page);
+    if (it == m_words.end()) {
+        it = m_words.insert(page, m_doc ? m_doc->words(page, m_rotation) : QVector<Word>());
+    }
+    return it.value();
+}
+
+PageView::Position PageView::positionAt(const QPoint &viewportPoint) {
+    if (m_layout.isEmpty()) {
+        return Position();
+    }
+    const QPoint origin = contentOrigin();
+
+    // Which page: the one under the point, else the nearest vertically, so a
+    // drag into the gap between pages still resolves somewhere sensible.
+    int page = 0;
+    int best = std::numeric_limits<int>::max();
+    for (int i = 0; i < m_layout.size(); ++i) {
+        const QRect rect = m_layout.at(i).translated(origin);
+        const int distance = viewportPoint.y() < rect.top()      ? rect.top() - viewportPoint.y()
+                             : viewportPoint.y() > rect.bottom() ? viewportPoint.y() - rect.bottom()
+                                                                 : 0;
+        if (distance < best) {
+            best = distance;
+            page = i;
+            if (distance == 0) {
+                break;
+            }
+        }
+    }
+
+    const QVector<Word> &words = wordsOf(page);
+    if (words.isEmpty()) {
+        return Position{page, 0};
+    }
+
+    const QPointF point = toPageSpace(page, viewportPoint);
+
+    int nearest = 0;
+    double nearestDistance = std::numeric_limits<double>::max();
+    for (int i = 0; i < words.size(); ++i) {
+        const QRectF &box = words.at(i).box;
+        if (box.contains(point)) {
+            return Position{page, i};
+        }
+        // Weight vertical distance heavily so that a point to the right of a
+        // line picks that line's word rather than one on the line below.
+        const double dx = point.x() < box.left()    ? box.left() - point.x()
+                          : point.x() > box.right() ? point.x() - box.right()
+                                                    : 0.0;
+        const double dy = point.y() < box.top()      ? box.top() - point.y()
+                          : point.y() > box.bottom() ? point.y() - box.bottom()
+                                                     : 0.0;
+        const double distance = dx + dy * 4.0;
+        if (distance < nearestDistance) {
+            nearestDistance = distance;
+            nearest = i;
+        }
+    }
+    return Position{page, nearest};
+}
+
+// --- Selection -------------------------------------------------------------
+
+void PageView::clearSelection() {
+    if (!m_selectionAnchor.isValid() && !m_selectionCursor.isValid()) {
+        return;
+    }
+    m_selectionAnchor = Position();
+    m_selectionCursor = Position();
+    viewport()->update();
+}
+
+QString PageView::selectedText() const {
+    if (!m_selectionAnchor.isValid() || !m_selectionCursor.isValid()) {
+        return QString();
+    }
+    Position from = m_selectionAnchor;
+    Position to = m_selectionCursor;
+    if (to < from) {
+        std::swap(from, to);
+    }
+
+    auto *self = const_cast<PageView *>(this);
+    QString text;
+    double previousBottom = -1.0;
+    int previousPage = -1;
+
+    for (int page = from.page; page <= to.page && page < m_layout.size(); ++page) {
+        const QVector<Word> &words = self->wordsOf(page);
+        const int first = page == from.page ? from.word : 0;
+        const int last = page == to.page ? to.word : words.size() - 1;
+        for (int i = first; i <= last && i < words.size(); ++i) {
+            if (i < 0) {
+                continue;
+            }
+            const Word &word = words.at(i);
+            if (!text.isEmpty()) {
+                // A new page, or a box that starts below the previous line,
+                // ends the line.
+                const bool newLine =
+                    page != previousPage || word.box.top() >= previousBottom;
+                text += newLine ? QLatin1Char('\n') : QLatin1Char(' ');
+            }
+            text += word.text;
+            previousBottom = word.box.center().y();
+            previousPage = page;
+        }
+    }
+    return text;
+}
+
+void PageView::copySelection() {
+    const QString text = selectedText();
+    if (!text.isEmpty()) {
+        QGuiApplication::clipboard()->setText(text);
+    }
+}
+
+void PageView::paintSelection(QPainter &painter, int page, const QPoint &origin) {
+    if (!m_selectionAnchor.isValid() || !m_selectionCursor.isValid()) {
+        return;
+    }
+    Position from = m_selectionAnchor;
+    Position to = m_selectionCursor;
+    if (to < from) {
+        std::swap(from, to);
+    }
+    if (page < from.page || page > to.page) {
+        return;
+    }
+
+    const QVector<Word> &words = wordsOf(page);
+    const int first = page == from.page ? from.word : 0;
+    const int last = page == to.page ? to.word : words.size() - 1;
+
+    QColor colour = palette().color(QPalette::Highlight);
+    colour.setAlpha(90);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(colour);
+    for (int i = qMax(0, first); i <= last && i < words.size(); ++i) {
+        painter.drawRect(fromPageSpace(page, words.at(i).box).translated(origin));
+    }
+}
+
+// --- Search ----------------------------------------------------------------
+
+QColor PageView::searchColor(int alpha) const {
+    QColor colour = palette().color(QPalette::Highlight).toHsv();
+    const int hue = colour.hue();
+    if (hue >= 0) { // -1 for greys, which have no hue to turn
+        colour.setHsv((hue + 180) % 360, colour.saturation(), colour.value());
+    }
+    colour = colour.toRgb();
+    colour.setAlpha(alpha);
+    return colour;
+}
+
+void PageView::addSearchHit(int page, const QRectF &rect) {
+    m_hits.append({page, rect});
+    if (m_currentHit < 0) {
+        m_currentHit = 0;
+    }
+    Q_EMIT searchHitsChanged(m_hits.size(), m_currentHit);
+    viewport()->update();
+}
+
+void PageView::clearSearchHits() {
+    if (m_hits.isEmpty() && m_currentHit < 0) {
+        return;
+    }
+    m_hits.clear();
+    m_currentHit = -1;
+    Q_EMIT searchHitsChanged(0, -1);
+    viewport()->update();
+}
+
+void PageView::goToSearchHit(int index) {
+    if (m_hits.isEmpty()) {
+        return;
+    }
+    // Wrap: the reader who presses Enter past the last hit means the first.
+    const int count = m_hits.size();
+    m_currentHit = ((index % count) + count) % count;
+
+    const auto &[page, rect] = m_hits.at(m_currentHit);
+    if (page >= 0 && page < m_layout.size()) {
+        const QSizeF size = m_doc ? m_doc->pageSize(page) : QSizeF();
+        const QRect target = fromPageSpace(page, Document::rotateRect(rect, size, m_rotation));
+        // Put the hit a third of the way down rather than at the very top, so
+        // there is context above it.
+        verticalScrollBar()->setValue(target.center().y() - viewport()->height() / 3);
+        if (m_content.width() > viewport()->width()) {
+            horizontalScrollBar()->setValue(target.center().x() - viewport()->width() / 2);
+        }
+    }
+    Q_EMIT searchHitsChanged(m_hits.size(), m_currentHit);
+    viewport()->update();
+}
+
+void PageView::nextSearchHit() {
+    if (!m_hits.isEmpty()) {
+        goToSearchHit(m_currentHit + 1);
+    }
+}
+
+void PageView::previousSearchHit() {
+    if (!m_hits.isEmpty()) {
+        goToSearchHit(m_currentHit - 1);
+    }
+}
+
+void PageView::paintSearchHits(QPainter &painter, int page, const QPoint &origin) {
+    if (m_hits.isEmpty()) {
+        return;
+    }
+    const QSizeF size = m_doc ? m_doc->pageSize(page) : QSizeF();
+    for (int i = 0; i < m_hits.size(); ++i) {
+        if (m_hits.at(i).first != page) {
+            continue;
+        }
+        const QRect target =
+            fromPageSpace(page, Document::rotateRect(m_hits.at(i).second, size, m_rotation))
+                .translated(origin);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(searchColor(102));
+        painter.drawRect(target);
+        if (i == m_currentHit) {
+            // The hit being visited is outlined in the same derived colour
+            // rather than given a second one.
+            painter.setBrush(Qt::NoBrush);
+            painter.setPen(QPen(searchColor(255), 2));
+            painter.drawRect(target.adjusted(-1, -1, 1, 1));
+        }
+    }
+}
+
+// --- Mouse -----------------------------------------------------------------
+
+void PageView::mouseMoveEvent(QMouseEvent *event) {
+    if (!m_dragging) {
+        QAbstractScrollArea::mouseMoveEvent(event);
+        return;
+    }
+    const Position position = positionAt(event->position().toPoint());
+    if (position.isValid() && !(position == m_selectionCursor)) {
+        m_selectionCursor = position;
+        viewport()->update();
+    }
+    event->accept();
+}
+
+void PageView::mouseReleaseEvent(QMouseEvent *event) {
+    if (m_dragging && event->button() == Qt::LeftButton) {
+        m_dragging = false;
+        event->accept();
+        return;
+    }
+    QAbstractScrollArea::mouseReleaseEvent(event);
 }
 
 void PageView::paintEmptyState(QPainter &painter) {
@@ -325,6 +632,20 @@ void PageView::keyPressEvent(QKeyEvent *event) {
     case Qt::Key_Left:
         hbar->setValue(hbar->value() - hbar->singleStep());
         return;
+    case Qt::Key_Return:
+    case Qt::Key_Enter:
+        if (event->modifiers() & Qt::ShiftModifier) {
+            previousSearchHit();
+        } else {
+            nextSearchHit();
+        }
+        return;
+    case Qt::Key_C:
+        if (event->modifiers() & Qt::ControlModifier) {
+            copySelection();
+            return;
+        }
+        break;
     case Qt::Key_F:
         if (event->modifiers() & Qt::ShiftModifier) {
             setFitPage();
@@ -441,10 +762,17 @@ void PageView::applyScale(double factor, Poppler::Page::Rotation rotation) {
     }
 
     const Anchor anchor = captureAnchor();
+    const bool turned = rotation != m_rotation;
     m_zoom = clamped;
     m_rotation = rotation;
     // Every cached image is at the old scale and orientation.
     m_cache.clear();
+    if (turned) {
+        // Word boxes are in points and so survive a zoom, but not a rotation:
+        // both the boxes and their reading order change with it.
+        m_words.clear();
+        clearSelection();
+    }
     relayout();
     restoreAnchor(anchor);
     Q_EMIT zoomChanged(m_zoom);

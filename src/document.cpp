@@ -5,6 +5,7 @@
 #include "document.h"
 
 #include <QFileInfo>
+#include <utility>
 
 namespace mergen {
 
@@ -120,6 +121,83 @@ QImage Document::renderPage(int index, double scale, Poppler::Page::Rotation rot
     }
     const double dpi = 72.0 * scale;
     return page->renderToImage(dpi, dpi, -1, -1, -1, -1, rotation);
+}
+
+QVector<Word> Document::words(int index, Poppler::Page::Rotation rotation) const {
+    QVector<Word> result;
+    if (!m_doc || index < 0 || index >= m_doc->numPages()) {
+        return result;
+    }
+    const auto page = m_doc->page(index);
+    if (!page) {
+        return result;
+    }
+    const auto boxes = page->textList(rotation);
+    result.reserve(static_cast<int>(boxes.size()));
+    for (const auto &box : boxes) {
+        result.append(Word{box->boundingBox(), box->text(), box->hasSpaceAfter()});
+    }
+    return result;
+}
+
+QList<QRectF> Document::search(int index, const QString &needle) const {
+    if (!m_doc || index < 0 || index >= m_doc->numPages() || needle.isEmpty()) {
+        return {};
+    }
+    const auto page = m_doc->page(index);
+    if (!page) {
+        return {};
+    }
+    return page->search(needle, Poppler::Page::IgnoreCase);
+}
+
+QRectF Document::rotateRect(const QRectF &rect, const QSizeF &unrotatedSize,
+                            Poppler::Page::Rotation rotation) {
+    const double w = unrotatedSize.width();
+    const double h = unrotatedSize.height();
+    switch (rotation) {
+    case Poppler::Page::Rotate90:
+        return QRectF(h - rect.y() - rect.height(), rect.x(), rect.height(), rect.width());
+    case Poppler::Page::Rotate180:
+        return QRectF(w - rect.x() - rect.width(), h - rect.y() - rect.height(), rect.width(),
+                      rect.height());
+    case Poppler::Page::Rotate270:
+        return QRectF(rect.y(), w - rect.x() - rect.width(), rect.height(), rect.width());
+    case Poppler::Page::Rotate0:
+        break;
+    }
+    return rect;
+}
+
+SearchWorker::SearchWorker(QString path, QByteArray data, QString needle, QObject *parent)
+    : QObject(parent), m_path(std::move(path)), m_data(std::move(data)),
+      m_needle(std::move(needle)) {}
+
+void SearchWorker::run() {
+    // A handle of this thread's own: poppler documents are not shareable.
+    auto doc = m_data.isEmpty() ? Poppler::Document::load(m_path)
+                                : Poppler::Document::loadFromData(m_data);
+    if (!doc || doc->isLocked()) {
+        Q_EMIT done(false);
+        return;
+    }
+
+    const int total = doc->numPages();
+    for (int i = 0; i < total; ++i) {
+        if (m_cancelled.loadRelaxed()) {
+            Q_EMIT done(true);
+            return;
+        }
+        const auto page = doc->page(i);
+        if (page) {
+            const QList<QRectF> hits = page->search(m_needle, Poppler::Page::IgnoreCase);
+            for (const QRectF &rect : hits) {
+                Q_EMIT hitFound(i, rect);
+            }
+        }
+        Q_EMIT progress(i + 1, total);
+    }
+    Q_EMIT done(false);
 }
 
 } // namespace mergen

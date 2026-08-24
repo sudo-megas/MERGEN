@@ -7,6 +7,7 @@
 #include <QAbstractScrollArea>
 #include <QHash>
 #include <QImage>
+#include <QList>
 #include <QPair>
 #include <QPoint>
 #include <QRect>
@@ -19,6 +20,7 @@
 namespace mergen {
 
 class Document;
+struct Word;
 
 /// How the zoom factor is chosen. Fit modes are recomputed on every resize;
 /// Fixed is whatever the user last dialled in.
@@ -64,6 +66,26 @@ public:
     /// never interrupts with a dialog.
     void setNotice(const QString &text);
 
+    // --- Selection ---------------------------------------------------------
+
+    /// The selected words joined with spaces, and a newline at each line end.
+    QString selectedText() const;
+    void copySelection();
+    void clearSelection();
+
+    // --- Search ------------------------------------------------------------
+
+    /// Hits arrive one at a time while the worker walks the document, so they
+    /// are appended rather than set in one go. Rects are in the unrotated page
+    /// space and are rotated for painting.
+    void addSearchHit(int page, const QRectF &rect);
+    void clearSearchHits();
+    int searchHitCount() const { return m_hits.size(); }
+    int currentSearchHit() const { return m_currentHit; }
+    void goToSearchHit(int index);
+    void nextSearchHit();
+    void previousSearchHit();
+
     static constexpr double kMinZoom = 0.10;
     static constexpr double kMaxZoom = 10.0;
     static constexpr double kZoomStep = 0.10;
@@ -72,6 +94,7 @@ Q_SIGNALS:
     void zoomChanged(double factor);
     void pageChanged(int index);
     void noticeClicked();
+    void searchHitsChanged(int count, int current);
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -79,6 +102,8 @@ protected:
     void keyPressEvent(QKeyEvent *event) override;
     void wheelEvent(QWheelEvent *event) override;
     void mousePressEvent(QMouseEvent *event) override;
+    void mouseMoveEvent(QMouseEvent *event) override;
+    void mouseReleaseEvent(QMouseEvent *event) override;
     void scrollContentsBy(int dx, int dy) override;
 
 private:
@@ -95,6 +120,31 @@ private:
     /// Notice bar geometry in viewport coordinates; null when no notice is set.
     QRect noticeRect() const;
     void paintNotice(QPainter &painter);
+
+    /// A word of the document, addressed as page plus index into that page's
+    /// word list. Ordered lexicographically, which is reading order.
+    struct Position {
+        int page = -1;
+        int word = -1;
+        bool isValid() const { return page >= 0 && word >= 0; }
+        bool operator<(const Position &o) const {
+            return page != o.page ? page < o.page : word < o.word;
+        }
+        bool operator==(const Position &o) const { return page == o.page && word == o.word; }
+    };
+
+    const QVector<Word> &wordsOf(int page);
+    /// The word nearest a viewport point, for anchoring and extending a drag.
+    Position positionAt(const QPoint &viewportPoint);
+    /// Page-space point, in points, for a viewport point on the given page.
+    QPointF toPageSpace(int page, const QPoint &viewportPoint) const;
+    /// Content-space rect for a rect given in the rotated page space.
+    QRect fromPageSpace(int page, const QRectF &pageRect) const;
+    void paintSelection(QPainter &painter, int page, const QPoint &origin);
+    void paintSearchHits(QPainter &painter, int page, const QPoint &origin);
+    /// Derived from QPalette::Highlight at runtime: hue turned through 180
+    /// degrees so a hit always contrasts with both the selection and the page.
+    QColor searchColor(int alpha) const;
 
     /// A point of the document expressed independently of zoom: which page,
     /// and where inside it, so that a zoom change can put it back under the
@@ -140,6 +190,18 @@ private:
     QVector<QRect> m_layout;
     QSize m_content;
     QHash<int, QImage> m_cache;
+
+    /// Word boxes per page. Unlike the render cache these do not depend on
+    /// zoom, so they survive a zoom change and are dropped only on rotation.
+    QHash<int, QVector<Word>> m_words;
+
+    Position m_selectionAnchor;
+    Position m_selectionCursor;
+    bool m_dragging = false;
+
+    /// (page, rect) with the rect in the unrotated page space.
+    QList<QPair<int, QRectF>> m_hits;
+    int m_currentHit = -1;
 };
 
 } // namespace mergen

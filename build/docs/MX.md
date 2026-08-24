@@ -307,7 +307,17 @@ over them. Ctrl+C joins the selected words' text.
 
 **Search.** `Poppler::Page::search()` per page, run over the whole document on
 submit, results stored as a list of (page, rect). Next/previous scrolls to the
-hit and paints a highlight in the derived contrast colour.
+hit and paints a highlight in the derived contrast colour, and wraps at either
+end. The hit being visited is outlined in that same derived colour rather than
+given a second one, so the palette stays at one derived value.
+
+Hits are stored in the *unrotated* page space and turned into the current
+orientation only when they are painted, which is a rect transform MERGEN does
+itself. Rotating the document therefore leaves a finished or running search
+intact instead of invalidating every rect in it. Word boxes for selection are
+the other way round: they are asked of poppler in the current orientation, since
+both the boxes and their reading order change with it, so they survive a zoom —
+they are in points — and are dropped on a rotation.
 
 Search runs off the main thread so the UI never blocks on a large document. The
 worker walks pages in order and emits each hit as it is found, plus a page-index
@@ -319,7 +329,24 @@ whatever hits were already found. Starting a new search cancels any pass still
 in flight.
 
 Poppler document objects are not thread-safe, so the worker opens its own
-`Poppler::Document` handle on the same path rather than sharing the view's.
+`Poppler::Document` handle on the same path rather than sharing the view's — or,
+for a document that arrived through the elevation helper, on the same bytes.
+
+There is one worker thread for the life of the window, and a pass is a worker
+moved onto it, so two document handles are never open at once. Disconnecting a
+cancelled worker does not discard the hits it has already queued across the
+thread boundary, so each signal is additionally checked against the pass that is
+current; without that, a replaced pass leaks its hits into the next one's list.
+
+The cancel button and Esc do different things on purpose. The button stops the
+pass and keeps what it found, leaving the bar open so those hits stay navigable.
+Esc stops the pass, closes the bar and clears the highlights.
+
+Enter and Shift+Enter are handled where the focus is — in the page view's key
+handler and in the search field's event filter — and deliberately not as
+window-wide shortcuts. Qt dispatches shortcuts before the focused widget sees
+the key, so a global Return would swallow Enter in the page counter and in the
+search field itself.
 
 **Elevation.** `readElevated()` starts `pkexec` under a local event loop rather
 than blocking on the process, so the window carries on painting while the

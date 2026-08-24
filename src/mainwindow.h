@@ -6,12 +6,17 @@
 
 #include <QByteArray>
 #include <QMainWindow>
+#include <QPointer>
 #include <QString>
 #include <QStringList>
 
 #include <memory>
 
 class QAction;
+class QLabel;
+class QProgressBar;
+class QPushButton;
+class QThread;
 class QFileSystemWatcher;
 class QLabel;
 class QLineEdit;
@@ -23,6 +28,7 @@ namespace mergen {
 
 class Document;
 class PageView;
+class SearchWorker;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -66,6 +72,20 @@ private:
 
     void watchDocument(const QString &path);
 
+    // Search — MX.md §8. The pass runs on a worker thread with its own
+    // document handle and reports hits as it finds them.
+    void buildSearchBar();
+    void openSearch();
+    void closeSearch();
+    void startSearch();
+    /// Stops a pass in flight but keeps the hits it already produced.
+    void cancelSearch();
+    void onSearchHit(int page, const QRectF &rect);
+    void onSearchProgress(int page, int total);
+    void onSearchDone(bool cancelled);
+    void updateSearchStatus();
+    bool eventFilter(QObject *watched, QEvent *event) override;
+
     std::unique_ptr<Document> m_doc;
     PageView *m_view = nullptr;
     QToolBar *m_toolBar = nullptr;
@@ -88,6 +108,18 @@ private:
     QLabel *m_pageTotal = nullptr;
 
     QFileSystemWatcher *m_watcher = nullptr;
+
+    QWidget *m_searchBar = nullptr;
+    QLineEdit *m_searchEdit = nullptr;
+    QProgressBar *m_searchProgress = nullptr;
+    QPushButton *m_searchCancel = nullptr;
+    QLabel *m_searchStatus = nullptr;
+
+    /// One thread for the life of the window; a pass is a worker moved onto
+    /// it. Cancelling lets the old worker fall out of its loop before the next
+    /// one starts, so there is never more than one document handle in flight.
+    QThread *m_searchThread = nullptr;
+    QPointer<SearchWorker> m_searchWorker;
 
     /// Guards against re-entering openPath from a nested event loop.
     bool m_opening = false;

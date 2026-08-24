@@ -4,16 +4,29 @@
 
 #pragma once
 
+#include <QAtomicInt>
 #include <QByteArray>
 #include <QImage>
+#include <QList>
+#include <QObject>
+#include <QRectF>
 #include <QSizeF>
 #include <QString>
+#include <QVector>
 
 #include <memory>
 
 #include <poppler-qt6.h>
 
 namespace mergen {
+
+/// One word of extracted text and where it sits on the page, in points, in the
+/// rotated coordinate space that was asked for.
+struct Word {
+    QRectF box;
+    QString text;
+    bool spaceAfter = false;
+};
 
 /// Why a load attempt did not produce a usable document.
 enum class LoadStatus {
@@ -63,6 +76,18 @@ public:
 
     QImage renderPage(int index, double scale, Poppler::Page::Rotation rotation) const;
 
+    /// Words of one page in reading order for the given orientation.
+    QVector<Word> words(int index, Poppler::Page::Rotation rotation) const;
+
+    /// Hits on one page, in the unrotated page space. Callers rotate the rects
+    /// for display, so a rotation mid-search does not invalidate the results.
+    QList<QRectF> search(int index, const QString &needle) const;
+
+    /// Maps a rect from the unrotated page space into the rotated one. The
+    /// page size given is the unrotated size.
+    static QRectF rotateRect(const QRectF &rect, const QSizeF &unrotatedSize,
+                             Poppler::Page::Rotation rotation);
+
 private:
     LoadStatus adopt(std::unique_ptr<Poppler::Document> doc, const QByteArray &password);
     void applyRenderHints();
@@ -70,6 +95,37 @@ private:
     std::unique_ptr<Poppler::Document> m_doc;
     QString m_path;
     QByteArray m_data;
+};
+
+/// Runs a search pass over its own document handle, because poppler's document
+/// objects are not safe to share between threads. Lives on a worker thread and
+/// reports hits as it finds them, so a hit early in a long document is usable
+/// long before the pass ends.
+class SearchWorker : public QObject {
+    Q_OBJECT
+
+public:
+    /// `data` is non-empty for documents that were read through the elevation
+    /// helper; the worker reuses those bytes rather than reopening a path it
+    /// has no permission to read.
+    SearchWorker(QString path, QByteArray data, QString needle, QObject *parent = nullptr);
+
+    /// Safe to call from another thread while run() is in progress.
+    void cancel() { m_cancelled.storeRelaxed(1); }
+
+public Q_SLOTS:
+    void run();
+
+Q_SIGNALS:
+    void hitFound(int page, const QRectF &rect);
+    void progress(int page, int total);
+    void done(bool cancelled);
+
+private:
+    QString m_path;
+    QByteArray m_data;
+    QString m_needle;
+    QAtomicInt m_cancelled{0};
 };
 
 } // namespace mergen
