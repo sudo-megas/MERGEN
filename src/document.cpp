@@ -5,6 +5,10 @@
 #include "document.h"
 
 #include <QCryptographicHash>
+#include <QScopeGuard>
+#include <cstring>
+
+#include <sys/prctl.h>
 #include <QDateTime>
 #include <poppler-annotation.h>
 #include <poppler-link.h>
@@ -14,6 +18,12 @@
 #include <utility>
 
 namespace mergen {
+namespace {
+/// Ceiling on a single rendered page, in bytes. Poppler stops honouring
+/// allocations near 2^31 and starts returning 1x1 instead of failing, so the
+/// limit is drawn just below that where a refusal is still a refusal.
+constexpr long long kMaxRenderBytes = 1536LL * 1024 * 1024;
+} // namespace
 
 Document::Document() = default;
 Document::~Document() = default;
@@ -56,6 +66,10 @@ LoadStatus Document::openData(const QByteArray &bytes, const QString &path,
     if (status == LoadStatus::Ok || status == LoadStatus::NeedsPassword) {
         m_path = QFileInfo(path).absoluteFilePath();
         m_data = bytes;
+        // While a privileged document is resident, a core dump would write its
+        // plaintext to disk — one authentication becoming a permanent
+        // unauthenticated copy. MZ.md §8 says nothing else is persisted.
+        ::prctl(PR_SET_DUMPABLE, 0, 0, 0, 0);
     }
     return status;
 }
@@ -66,11 +80,14 @@ LoadStatus Document::adopt(std::unique_ptr<Poppler::Document> doc, const QByteAr
     // already tried the empty password, so an empty one here cannot help.
     if (doc->isLocked() && (password.isEmpty() || doc->unlock(password, password))) {
         // Keep the handle: the caller prompts and calls unlock through a retry.
+        // isOpen() stays false meanwhile — the catalog is not there yet.
         m_doc = std::move(doc);
+        m_locked = true;
         return LoadStatus::NeedsPassword;
     }
 
     m_doc = std::move(doc);
+    m_locked = false;
     applyRenderHints();
     return LoadStatus::Ok;
 }
@@ -94,21 +111,34 @@ bool Document::unlock(const QByteArray &password) {
         return false;
     }
     if (!m_doc->isLocked()) {
+        m_locked = false;
         return true;
     }
     if (m_doc->unlock(password, password)) {
         return false; // still locked: wrong password
     }
+    m_locked = false;
     // unlock() rebuilds poppler's internal document, so the hints set at load
     // time are gone with it.
     applyRenderHints();
     return true;
 }
 
+void Document::wipeData() {
+    if (!m_data.isEmpty()) {
+        // data() detaches first, so this erases the buffer this object owns.
+        std::memset(m_data.data(), 0, static_cast<size_t>(m_data.size()));
+    }
+    m_data.clear();
+    // Nothing privileged is held any more, so the process may be dumped again.
+    ::prctl(PR_SET_DUMPABLE, 1, 0, 0, 0);
+}
+
 void Document::close() {
     m_doc.reset();
+    m_locked = false;
     m_path.clear();
-    m_data.clear();
+    wipeData();
     m_hash.clear();
 }
 
@@ -196,12 +226,11 @@ QString Document::contentHash() const {
     if (!m_hash.isEmpty() || !m_doc) {
         return m_hash;
     }
-    // Bytes already in hand for a document that came through the elevation
-    // helper; otherwise read the file once.
+    // A document that arrived through the elevation helper is deliberately NOT
+    // hashed: that digest is written to portals.toml, and a digest of
+    // privileged content does not belong in an unprivileged state file.
     if (!m_data.isEmpty()) {
-        m_hash = QString::fromLatin1(
-            QCryptographicHash::hash(m_data, QCryptographicHash::Sha256).toHex());
-        return m_hash;
+        return QString();
     }
     QFile file(m_path);
     if (!file.open(QIODevice::ReadOnly)) {
@@ -350,6 +379,11 @@ QSizeF Document::pageSize(int index) const {
 }
 
 QImage Document::renderPage(int index, double scale, Poppler::Page::Rotation rotation) const {
+    // Poppler refuses allocations past 2^31 bytes by returning a 1x1 image that
+    // is NOT null, so every isNull() check downstream would pass on a failed
+    // render — a printed sheet of solid black, a 1x1 cached as the page, two
+    // different documents compared as identical. Caught here, once, so those
+    // checks start meaning what they say — MZ.md §9.
     if (!m_doc || index < 0 || index >= m_doc->numPages() || scale <= 0.0) {
         return QImage();
     }
@@ -358,7 +392,28 @@ QImage Document::renderPage(int index, double scale, Poppler::Page::Rotation rot
         return QImage();
     }
     const double dpi = 72.0 * scale;
-    return page->renderToImage(dpi, dpi, -1, -1, -1, -1, rotation);
+
+    // What the page should come back as, so a refusal can be told from a render.
+    const QSizeF points = page->pageSizeF();
+    const bool turned = rotation == Poppler::Page::Rotate90 || rotation == Poppler::Page::Rotate270;
+    const double wantWidth = (turned ? points.height() : points.width()) * scale;
+    const double wantHeight = (turned ? points.width() : points.height()) * scale;
+
+    // Refuse before poppler has to: past 2^31 bytes it hands back 1x1 rather
+    // than failing, and an implausible /MediaBox from the document must not be
+    // able to demand gigabytes — MZ.md §9.
+    if (wantWidth * wantHeight * 4.0 > double(kMaxRenderBytes)) {
+        return QImage();
+    }
+
+    QImage image = page->renderToImage(dpi, dpi, -1, -1, -1, -1, rotation);
+
+    // A size wildly unlike the one asked for means poppler declined. One pixel
+    // is its tell, but compare properly rather than special-casing 1x1.
+    if (!image.isNull() && (image.width() < wantWidth / 2.0 || image.height() < wantHeight / 2.0)) {
+        return QImage();
+    }
+    return image;
 }
 
 QVector<Word> Document::words(int index, Poppler::Page::Rotation rotation) const {
@@ -431,6 +486,14 @@ SearchWorker::SearchWorker(QString path, QByteArray data, QString needle, QObjec
       m_needle(std::move(needle)) {}
 
 void SearchWorker::run() {
+    // The worker's copy of an elevated document is wiped when the pass ends,
+    // for the same reason Document::wipeData exists.
+    const QScopeGuard wipe([this] {
+        if (!m_data.isEmpty()) {
+            std::memset(m_data.data(), 0, static_cast<size_t>(m_data.size()));
+            m_data.clear();
+        }
+    });
     // A handle of this thread's own: poppler documents are not shareable.
     auto doc = m_data.isEmpty() ? Poppler::Document::load(m_path)
                                 : Poppler::Document::loadFromData(m_data);

@@ -109,7 +109,8 @@ private:
     // written without them asking for it.
     static QString portalFilePath();
     void loadPortals();
-    void savePortals() const;
+    /// False when the store could not be written; the caller says so.
+    bool savePortals() const;
     /// Marks one end, or completes a portal if an end is already marked.
     void markPortal();
     /// Follows the portal touching the current page, opening the far document

@@ -15,8 +15,11 @@ makedepends=('cmake' 'ninja' 'gcc' 'git')
 # declares. It differs from TRITIUM's -or-later on purpose: a licence is not
 # something to widen for the sake of matching a sibling.
 #
-# Integrity comes from the signed tag rather than a checksum, which is the
-# usual arrangement for a VCS source and is why SKIP is correct here.
+# SKIP is correct for a VCS source, but it is worth being exact about what that
+# does and does not buy: integrity here rests on the transport and on the
+# repository, not on a signature. The tag this builds from is lightweight, so
+# nothing is verified cryptographically. Signing it (git tag -s) and adding
+# validpgpkeys would change that; until then the comment should not claim it.
 source=("$pkgname::git+$url.git#tag=v$pkgver")
 sha256sums=('SKIP')
 

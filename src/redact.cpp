@@ -6,6 +6,8 @@
 
 #include <QFile>
 #include <QFileInfo>
+
+#include <sys/stat.h>
 #include <QObject>
 #include <QPointF>
 
@@ -192,14 +194,30 @@ bool stillThere(const QString &path, int page, const QString &needle) {
 
 Redact::Result Redact::run(const QString &source, const QString &destination, int page,
                            const QRectF &area, const QString &expected) {
-    if (QFileInfo(source).absoluteFilePath() == QFileInfo(destination).absoluteFilePath()) {
+    // Identity, not spelling. absoluteFilePath() normalises ".." and nothing
+    // else: a symlink walks straight through it and the source is destroyed.
+    // canonicalFilePath() would catch that but not a hard link; device+inode
+    // catches both — MZ.md §5 bans editing a PDF in place.
+    struct stat a{};
+    struct stat b{};
+    if (::stat(source.toLocal8Bit().constData(), &a) == 0 &&
+        ::stat(destination.toLocal8Bit().constData(), &b) == 0 && a.st_dev == b.st_dev &&
+        a.st_ino == b.st_ino) {
+        return {false, QObject::tr("Redaction never writes over the document it read.")};
+    }
+    if (QFileInfo(source).canonicalFilePath() == QFileInfo(destination).canonicalFilePath() &&
+        !QFileInfo(source).canonicalFilePath().isEmpty()) {
         return {false, QObject::tr("Redaction never writes over the document it read.")};
     }
 
     int removed = 0;
     try {
+        // Named, not a temporary: qpdf keeps the pointer and reads it later.
+        const QByteArray sourcePath = source.toLocal8Bit();
+        const QByteArray destinationPath = destination.toLocal8Bit();
+
         QPDF pdf;
-        pdf.processFile(source.toLocal8Bit().constData());
+        pdf.processFile(sourcePath.constData());
 
         QPDFPageDocumentHelper pages(pdf);
         std::vector<QPDFPageObjectHelper> all = pages.getAllPages();
@@ -221,7 +239,8 @@ Redact::Result Redact::run(const QString &source, const QString &destination, in
                                   " " + std::to_string(area.height()) + " re f Q\n";
         target.addPageContents(QPDFObjectHandle::newStream(&pdf, cover), false);
 
-        QPDFWriter writer(pdf, destination.toLocal8Bit().constData());
+        // The temporary that used to be here was freed before write() read it.
+        QPDFWriter writer(pdf, destinationPath.constData());
         writer.setStaticID(false);
         // The filter runs here, so the count is only known afterwards.
         writer.write();

@@ -68,7 +68,7 @@ int main(int argc, char *argv[]) {
     }
 
     // Everything below inspects the descriptor, not the name.
-    struct stat st {};
+    struct stat st{};
     if (::fstat(fd, &st) != 0) {
         ::close(fd);
         return fail(std::strerror(errno));
@@ -108,6 +108,12 @@ int main(int argc, char *argv[]) {
         return fail("write failed");
     }
 
+    // st_size was a snapshot, and a file that grows while it is read would
+    // otherwise be copied without bound. The helper's job is one file's bytes,
+    // so it emits what the file declared and no more — whichever of the two
+    // limits is tighter.
+    const long long limit = st.st_size < kMaxBytes ? st.st_size : kMaxBytes;
+    long long sent = static_cast<long long>(kMagicLen);
     char buf[64 * 1024];
     for (;;) {
         const ssize_t n = ::read(fd, buf, sizeof(buf));
@@ -120,6 +126,12 @@ int main(int argc, char *argv[]) {
         }
         if (n == 0) {
             break;
+        }
+        sent += n;
+        if (sent > limit) {
+            // Truncate rather than emit bytes the caller was never told about.
+            ::close(fd);
+            return fail("file changed while it was being read");
         }
         if (!writeAll(buf, static_cast<size_t>(n))) {
             ::close(fd);

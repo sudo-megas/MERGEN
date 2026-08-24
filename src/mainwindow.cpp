@@ -675,7 +675,9 @@ QByteArray MainWindow::readElevated(const QString &path, QString *error) const {
     const QString name = QFileInfo(path).fileName();
 
     QProcess pkexec;
-    pkexec.setProgram(QStringLiteral("pkexec"));
+    // Absolute: a bare name is resolved through $PATH, and a shim there
+    // replaces the whole privileged read with no prompt at all.
+    pkexec.setProgram(QStringLiteral("/usr/bin/pkexec"));
     pkexec.setArguments({QStringLiteral(MERGEN_HELPER_PATH), path});
     pkexec.setProcessChannelMode(QProcess::SeparateChannels);
     pkexec.start();
@@ -846,13 +848,13 @@ void MainWindow::loadPortals() {
     }
 }
 
-void MainWindow::savePortals() const {
+bool MainWindow::savePortals() const {
     const QString path = portalFilePath();
     QDir().mkpath(QFileInfo(path).absolutePath());
 
     QSaveFile file(path);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        return;
+        return false;
     }
     QByteArray out;
     for (const Portal &portal : m_portals) {
@@ -864,7 +866,8 @@ void MainWindow::savePortals() const {
         }
     }
     file.write(out);
-    file.commit();
+    // The reader is told what actually happened, not what was attempted.
+    return file.commit();
 }
 
 void MainWindow::markPortal() {
@@ -890,8 +893,12 @@ void MainWindow::markPortal() {
 
     m_portals.append({*m_pendingEnd, here});
     m_pendingEnd.reset();
-    savePortals();
-    m_view->setNotice(tr("Portal made. Ctrl+J follows it."));
+    if (savePortals()) {
+        m_view->setNotice(tr("Portal made. Ctrl+J follows it."));
+    } else {
+        // It exists for this session, but it will not be there tomorrow.
+        m_view->setNotice(tr("Portal made, but it could not be saved to disk."));
+    }
 }
 
 void MainWindow::followPortal() {

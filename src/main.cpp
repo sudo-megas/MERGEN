@@ -8,7 +8,17 @@
 #include <QApplication>
 #include <QFileInfo>
 
+#include <csignal>
+
 int main(int argc, char *argv[]) {
+    // Two signals that would otherwise end the process where a failed write
+    // should have been reported instead. SIGXFSZ fires when a file-size limit
+    // is hit — and recent.toml is written on every successful open, so that is
+    // the most travelled path in the application. Ignoring them turns both into
+    // an errno the caller can see.
+    ::signal(SIGXFSZ, SIG_IGN);
+    ::signal(SIGPIPE, SIG_IGN);
+
     QApplication app(argc, argv);
 
     QApplication::setApplicationName(QStringLiteral("mergen"));

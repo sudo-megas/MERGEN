@@ -99,7 +99,15 @@ public:
 
     void close();
 
-    bool isOpen() const { return m_doc != nullptr; }
+    /// A document that is loaded but still encrypted is NOT open: poppler
+    /// leaves its catalog null until it is decrypted, so every accessor would
+    /// dereference nothing. adopt() deliberately keeps the handle so unlock()
+    /// can retry, which is why the locked state is tracked rather than
+    /// inferred from the pointer — MZ.md §9.
+    bool isOpen() const { return m_doc != nullptr && !m_locked; }
+
+    /// Loaded, but still waiting for a password.
+    bool isLocked() const { return m_doc != nullptr && m_locked; }
     QString path() const { return m_path; }
 
     /// Non-empty only when the file was read through the elevation helper.
@@ -153,12 +161,17 @@ public:
 
 private:
     LoadStatus adopt(std::unique_ptr<Poppler::Document> doc, const QByteArray &password);
+    /// Overwrites the elevated document's bytes before releasing them.
+    /// QByteArray::clear() frees without erasing, and MX.md §5 takes exactly
+    /// this care over the password — the document it unlocks deserves the same.
+    void wipeData();
     void applyRenderHints();
 
     std::unique_ptr<Poppler::Document> m_doc;
     QString m_path;
     QByteArray m_data;
     mutable QString m_hash;
+    bool m_locked = false;
 };
 
 /// Runs a search pass over its own document handle, because poppler's document
@@ -189,6 +202,7 @@ private:
     QString m_path;
     QByteArray m_data;
     mutable QString m_hash;
+    bool m_locked = false;
     QString m_needle;
     QAtomicInt m_cancelled{0};
 };
