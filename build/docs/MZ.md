@@ -508,13 +508,36 @@ so plainly rather than implying more precision than it has.
 jump to the other; if the far document is not open, MERGEN opens it first.
 They are made explicitly, listed in the command overlay, and stored per §8.
 
-**Redaction.** The reader selects text and asks for it to be removed. MERGEN
-resolves the selection to its content-stream extents, hands `qpdf` the removal,
-and writes a new file. The open document is untouched, the destination is never
-the source, and the result is verified by searching the output for the removed
-text before the reader is told it succeeded — a redaction tool that cannot
-demonstrate the text is gone is the kind that ships the lie this project is
-adding a dependency specifically to avoid.
+**Redaction.** The reader selects text and asks for it to be removed. The open
+document is untouched, the destination is never the source, and the result is
+verified by searching the output for the removed text before the reader is told
+it succeeded — a redaction tool that cannot demonstrate the text is gone is the
+kind that ships the lie this project added a dependency specifically to avoid.
+
+A show-text operator carries the text and not its position, so where it lands
+has to be tracked through the graphics and text matrices that preceded it: `q`
+and `Q`, `cm`, `BT`, `Tm`, `Td`, `TD`, `T*`, `TL`. Operators whose origin falls
+inside the selected area are dropped, and a black rectangle is drawn over the
+gap so the page shows that something was taken rather than quietly closing over
+it.
+
+> [!NOTE]
+> **Amended at Z10.** `QPDFPageObjectHelper::filterContents` runs a filter
+> through a pipeline and leaves the page untouched; only `addContentTokenFilter`
+> rewrites the content stream, and it does so when the document is written
+> rather than when it is asked. The first implementation used the former,
+> reported success, and changed nothing — caught because the output was read
+> back with `pdftotext` rather than trusted.
+
+Two things it declines rather than half-does. A selection spanning two pages
+has no single page to redact on, and removing part of it would be worse than
+saying so. And a document that arrived through the elevation helper exists here
+only as bytes, with no readable path for `qpdf` to work from.
+
+The verification is not a formality. Given a request whose named text survives
+the rewrite, the written file is deleted and the reader is told nothing was
+saved — tested by asking for an area that holds one line while naming another,
+and confirming the output is discarded rather than handed over as redacted.
 
 **Motion.** `QPropertyAnimation` on the scrollbar's `value`, eased out over
 200 ms, for page jumps and search navigation. Animations are interruptible and
@@ -747,8 +770,10 @@ The only milestone that pushes, builds a package, or publishes anything.
    tooling credit anywhere in tree, commits or About), dependencies (nothing
    linked beyond §3), and strings (no hardcoded colours outside the derived
    palette paths). Gated on every push.
-3. Reconcile packaging against the family: move `PKGBUILD` under `packaging/`,
-   and settle the licence spelling so the `PKGBUILD` and the repository agree.
+3. Reconcile packaging against the family: move `PKGBUILD` under `packaging/`.
+   The licence stays `GPL-3.0-only`, which is what every source file in the tree
+   already declares; it differs from TRITIUM's `-or-later` deliberately, since a
+   licence is not something to widen for the sake of matching a sibling.
 4. Update `PKGBUILD` for the `qpdf` dependency; test in a clean chroot with
    `extra-x86_64-build`; install and smoke-test the result.
 5. Verify the release workflow still builds from a tag.

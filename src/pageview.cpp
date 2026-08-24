@@ -344,6 +344,32 @@ void PageView::setPresenting(bool on) {
     viewport()->update();
 }
 
+QPair<int, QRectF> PageView::selectionBounds() const {
+    if (!m_doc || !m_selectionAnchor.isValid() || !m_selectionCursor.isValid()) {
+        return {-1, QRectF()};
+    }
+    const Position from = qMin(m_selectionAnchor, m_selectionCursor);
+    const Position to = qMax(m_selectionAnchor, m_selectionCursor);
+    // A selection spanning pages has no single page to redact on, and quietly
+    // redacting only part of it would be worse than declining.
+    if (from.page != to.page) {
+        return {-1, QRectF()};
+    }
+
+    const auto found = m_words.constFind(from.page);
+    if (found == m_words.constEnd()) {
+        return {-1, QRectF()};
+    }
+    QRectF box;
+    for (int i = from.word; i <= to.word && i < found.value().size(); ++i) {
+        box = box.isNull() ? found.value().at(i).box : box.united(found.value().at(i).box);
+    }
+    if (box.isNull()) {
+        return {-1, QRectF()};
+    }
+    return {from.page, Document::unrotateRect(box, m_doc->pageSize(from.page), m_rotation)};
+}
+
 void PageView::setDiffBands(int page, const QVector<QPair<double, double>> &bands) {
     if (bands.isEmpty()) {
         m_diffBands.remove(page);

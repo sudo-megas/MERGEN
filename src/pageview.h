@@ -89,6 +89,11 @@ public:
 
     /// The selected words joined with spaces, and a newline at each line end.
     QString selectedText() const;
+
+    /// The page the selection sits on and its bounding box in the document's
+    /// own unrotated space, or {-1, {}} when nothing is selected. Redaction
+    /// works in that space, not in the one on screen.
+    QPair<int, QRectF> selectionBounds() const;
     void copySelection();
     void clearSelection();
 

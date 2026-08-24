@@ -116,6 +116,8 @@ private:
     /// if it is not the one on screen.
     void followPortal();
     void showPortals();
+    /// Removes the selected text from a copy of the document. Never in place.
+    void redactSelection();
 
     void chooseComparison();
     /// Renders both documents small and marks the bands that differ.

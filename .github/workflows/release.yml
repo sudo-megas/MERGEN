@@ -20,13 +20,13 @@ jobs:
           pacman -Syu --noconfirm
           pacman -S --needed --noconfirm \
             git cmake ninja gcc github-cli \
-            qt6-base poppler-qt6 polkit ttf-cascadia-code-nerd
+            qt6-base poppler-qt6 qpdf polkit ttf-cascadia-code-nerd
 
       - name: Fetch the tagged tree
         run: |
           git clone --depth 1 --branch "$GITHUB_REF_NAME" \
             "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" checkout
-          cp checkout/PKGBUILD .
+          cp checkout/packaging/PKGBUILD .
 
       - name: Build the package
         run: |

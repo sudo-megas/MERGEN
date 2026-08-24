@@ -1,0 +1,41 @@
+name: audit
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
+
+    steps:
+      - name: Install the toolchain
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --needed --noconfirm \
+            git cmake ninja gcc \
+            qt6-base poppler-qt6 qpdf polkit
+
+      - name: Fetch the tree with its history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build
+        run: |
+          # The tree is checked out as another user; git refuses to read it
+          # otherwise, and the attribution audit walks the history.
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -Wno-dev
+          cmake --build build
+
+      - name: Attribution
+        run: bash scripts/audit-attribution.sh
+
+      - name: Dependencies
+        run: bash scripts/audit-deps.sh build/mergen
+
+      - name: Colours
+        run: bash scripts/audit-colours.sh

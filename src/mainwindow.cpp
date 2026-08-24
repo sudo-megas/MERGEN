@@ -8,6 +8,7 @@
 #include "iconset.h"
 #include "overlay.h"
 #include "pageview.h"
+#include "redact.h"
 #include "license.h"
 
 #include <QAction>
@@ -934,6 +935,42 @@ void MainWindow::followPortal() {
     m_view->setNotice(tr("No portal on this page."));
 }
 
+void MainWindow::redactSelection() {
+    if (!m_doc->isOpen()) {
+        return;
+    }
+    const QString text = m_view->selectedText().simplified();
+    const auto [page, box] = m_view->selectionBounds();
+    if (page < 0 || text.isEmpty()) {
+        m_view->setNotice(tr("Select the text to remove first, on one page."));
+        return;
+    }
+    if (!m_doc->data().isEmpty()) {
+        // The document arrived through the elevation helper and exists here
+        // only as bytes; there is no readable path for qpdf to work from.
+        m_view->setNotice(tr("A document opened with elevated permission cannot be redacted."));
+        return;
+    }
+
+    const QFileInfo source(m_doc->path());
+    const QString suggested = source.absolutePath() + QLatin1Char('/') + source.completeBaseName() +
+                              tr("-redacted") + QStringLiteral(".pdf");
+    const QString destination = QFileDialog::getSaveFileName(
+        this, tr("Save redacted copy as"), suggested, tr("PDF documents (*.pdf)"));
+    if (destination.isEmpty()) {
+        return;
+    }
+
+    // The view works from the top down and PDF from the bottom up.
+    const QSizeF size = m_doc->pageSize(page);
+    const QRectF area(box.x(), size.height() - box.y() - box.height(), box.width(), box.height());
+
+    const Redact::Result result = Redact::run(m_doc->path(), destination, page, area, text);
+    m_view->setNotice(
+        result.ok ? tr("Redacted copy written to %1.").arg(QFileInfo(destination).fileName())
+                  : result.error);
+}
+
 void MainWindow::showPortals() {
     auto *list = new QListWidget;
     list->setFrameShape(QFrame::NoFrame);
@@ -1244,6 +1281,10 @@ void MainWindow::showCommands() {
 
         if (text.isEmpty() || QStringLiteral("portals").contains(text, Qt::CaseInsensitive)) {
             add(tr("Portals"), [this] { showPortals(); });
+        }
+        if (!m_view->selectedText().trimmed().isEmpty() &&
+            (text.isEmpty() || QStringLiteral("redact").contains(text, Qt::CaseInsensitive))) {
+            add(tr("Redact selection"), [this] { redactSelection(); });
         }
 
         int rows = 0;

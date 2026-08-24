@@ -145,6 +145,12 @@ public:
     static QRectF rotateRect(const QRectF &rect, const QSizeF &unrotatedSize,
                              Poppler::Page::Rotation rotation);
 
+    /// The inverse of \ref rotateRect: takes a rect in the rotated space back
+    /// to the unrotated one. Redaction needs it, because what the reader
+    /// selected on screen has to be found in the document's own coordinates.
+    static QRectF unrotateRect(const QRectF &rect, const QSizeF &unrotatedSize,
+                               Poppler::Page::Rotation rotation);
+
 private:
     LoadStatus adopt(std::unique_ptr<Poppler::Document> doc, const QByteArray &password);
     void applyRenderHints();

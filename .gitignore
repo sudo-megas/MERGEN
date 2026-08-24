@@ -13,3 +13,7 @@
 *~
 .cache/
 compile_commands.json
+
+# Working notes from the v2.0 research pass. MZ.md is the source of truth;
+# these are scratch, not project documentation.
+/docs/

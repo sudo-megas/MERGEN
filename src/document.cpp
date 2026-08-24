@@ -389,6 +389,25 @@ QList<QRectF> Document::search(int index, const QString &needle) const {
     return page->search(needle, Poppler::Page::IgnoreCase);
 }
 
+QRectF Document::unrotateRect(const QRectF &rect, const QSizeF &unrotatedSize,
+                              Poppler::Page::Rotation rotation) {
+    const double w = unrotatedSize.width();
+    const double h = unrotatedSize.height();
+    switch (rotation) {
+    case Poppler::Page::Rotate90:
+        // rotateRect90 maps (x,y,rw,rh) -> (h-y-rh, x, rh, rw); read backwards.
+        return QRectF(rect.y(), h - rect.x() - rect.width(), rect.height(), rect.width());
+    case Poppler::Page::Rotate180:
+        return QRectF(w - rect.x() - rect.width(), h - rect.y() - rect.height(), rect.width(),
+                      rect.height());
+    case Poppler::Page::Rotate270:
+        return QRectF(w - rect.y() - rect.height(), rect.x(), rect.height(), rect.width());
+    case Poppler::Page::Rotate0:
+        break;
+    }
+    return rect;
+}
+
 QRectF Document::rotateRect(const QRectF &rect, const QSizeF &unrotatedSize,
                             Poppler::Page::Rotation rotation) {
     const double w = unrotatedSize.width();

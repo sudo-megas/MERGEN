@@ -1,14 +1,20 @@
 # Maintainer: MEGAS <halil@namli.xyz>
 
 pkgname=mergen
-pkgver=1.0.0
+pkgver=2.0.0
 pkgrel=1
 pkgdesc='A minimal PDF viewer'
 arch=('x86_64')
 url='https://github.com/sudo-megas/MERGEN'
 license=('GPL-3.0-only')
-depends=('qt6-base' 'poppler-qt6' 'polkit' 'ttf-cascadia-code-nerd' 'hicolor-icon-theme')
+depends=('qt6-base' 'poppler-qt6' 'qpdf' 'polkit' 'ttf-cascadia-code-nerd' 'hicolor-icon-theme')
 makedepends=('cmake' 'ninja' 'gcc' 'git')
+# qpdf is here for content-level redaction and nothing else — MZ.md §3.
+#
+# The licence stays GPL-3.0-only, which is what every source file in the tree
+# declares. It differs from TRITIUM's -or-later on purpose: a licence is not
+# something to widen for the sake of matching a sibling.
+#
 # Integrity comes from the signed tag rather than a checksum, which is the
 # usual arrangement for a VCS source and is why SKIP is correct here.
 source=("$pkgname::git+$url.git#tag=v$pkgver")

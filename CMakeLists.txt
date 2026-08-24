@@ -24,6 +24,7 @@ include(GNUInstallDirs)
 find_package(Qt6 6.5 REQUIRED COMPONENTS Widgets PrintSupport Network)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(POPPLER_QT6 REQUIRED IMPORTED_TARGET poppler-qt6)
+pkg_check_modules(QPDF REQUIRED IMPORTED_TARGET libqpdf)
 
 # The About dialog carries the licence in full; compile it in rather than
 # depend on a file being present at runtime.
@@ -50,7 +51,9 @@ add_executable(mergen
     src/overlay.cpp
     src/overlay.h
     src/control.cpp
-    src/control.h)
+    src/control.h
+    src/redact.cpp
+    src/redact.h)
 
 target_compile_definitions(mergen PRIVATE
     MERGEN_VERSION="${PROJECT_VERSION}"
@@ -67,7 +70,8 @@ target_link_libraries(mergen PRIVATE
     Qt6::Widgets
     Qt6::PrintSupport
     Qt6::Network
-    PkgConfig::POPPLER_QT6)
+    PkgConfig::POPPLER_QT6
+    PkgConfig::QPDF)
 
 add_executable(mergen-open src/mergen-open.cpp)
 target_compile_options(mergen-open PRIVATE -Wall -Wextra -Wpedantic)
