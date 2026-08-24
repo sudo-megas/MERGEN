@@ -1035,6 +1035,24 @@ candidates, with what each costs:
 
 Nothing is built toward any of them before the ruling.
 
+> [!NOTE]
+> **Amended at 2.0.2.** The elevation path could not be reached by the files it
+> exists for. `Document::openPath` tested `QFileInfo::exists()`, which answers
+> `stat()` and returns false for every failure alike — so a PDF inside a
+> directory this user cannot traverse (`/root`, mode 750, the ordinary case)
+> came back `NotFound`, and MainWindow reported "does not exist" and stopped
+> before the `NoPermission` branch that offers to authenticate. The feature had
+> been shipping since v1.0 and worked only in the narrow case of an unreadable
+> file inside a *traversable* directory.
+>
+> `errno` separates the two: `ENOENT` is not there, `EACCES` is not permitted to
+> look, and only the second is a question `pkexec` can answer.
+>
+> Found by opening a root-owned PDF with the installed package. Eleven audit
+> agents, one of them dedicated to the privileged path, and fourteen acceptance
+> suites had all passed over it — none of them ever ran the real binary against
+> a file it genuinely could not stat.
+
 **Where an elevated document may go.** A file the reader could only open by
 authenticating to `pkexec` is in memory as plaintext that their own account has
 no right to. Three ways out of the process were considered at Z11, and they are

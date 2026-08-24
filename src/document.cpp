@@ -4,6 +4,9 @@
 
 #include "document.h"
 
+#include <cerrno>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <algorithm>
 
 #include <QCryptographicHash>
@@ -62,10 +65,29 @@ Document::~Document() = default;
 
 LoadStatus Document::openPath(const QString &path, const QByteArray &password) {
     const QFileInfo info(path);
-    if (!info.exists() || !info.isFile()) {
+
+    // Not QFileInfo::exists(). It answers stat() and reports false for every
+    // failure alike, so a PDF inside a directory this user cannot traverse —
+    // /root, mode 750, which is the ordinary case — came back "does not exist"
+    // and the elevation path was never reached at all. The one feature built
+    // for exactly that file could not be triggered by it.
+    //
+    // errno tells the two apart: ENOENT means it is not there, EACCES means we
+    // are not permitted to look, and only the second is a question pkexec can
+    // answer.
+    struct stat st{};
+    if (::stat(path.toLocal8Bit().constData(), &st) != 0) {
+        if (errno == EACCES) {
+            return LoadStatus::NoPermission;
+        }
         return LoadStatus::NotFound;
     }
-    if (!info.isReadable()) {
+    if (!S_ISREG(st.st_mode)) {
+        return LoadStatus::NotFound;
+    }
+    // Readable in principle is not readable in fact — a mode-600 file owned by
+    // someone else sits in a directory we can traverse, and stat succeeds.
+    if (::access(path.toLocal8Bit().constData(), R_OK) != 0) {
         return LoadStatus::NoPermission;
     }
 

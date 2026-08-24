@@ -266,6 +266,47 @@ int main(int argc, char **argv) {
         check(out.startsWith("%PDF-"), "the stream begins with the magic readElevated checks");
     }
 
+    std::printf("\n--- unreadable is not the same as absent ---\n");
+    {
+        // A file inside a directory this user cannot traverse. stat() fails with
+        // EACCES, and QFileInfo::exists() reports false for that exactly as it
+        // does for a file that is not there — which sent every root-owned PDF
+        // down the "does not exist" path and made the elevation feature
+        // unreachable by the only files it was built for.
+        QTemporaryDir shed;
+        check(shed.isValid(), "temporary directory");
+        const QString hidden = shed.path() + QStringLiteral("/inside.pdf");
+        QFile::copy(QStringLiteral("test.pdf"), hidden);
+        check(QFile::exists(hidden), "a document inside it");
+
+        // Take away search permission, the way /root is 750 to everyone else.
+        check(QFile::setPermissions(shed.path(), QFile::ReadOwner | QFile::WriteOwner),
+              "directory made non-traversable");
+
+        Document d;
+        const LoadStatus status = d.openPath(hidden);
+        std::printf("      QFileInfo::exists() says %s, openPath says %s\n",
+                    QFileInfo(hidden).exists() ? "true" : "false",
+                    status == LoadStatus::NoPermission ? "NoPermission"
+                    : status == LoadStatus::NotFound   ? "NotFound"
+                    : status == LoadStatus::Ok         ? "Ok" : "other");
+        check(status == LoadStatus::NoPermission,
+              "an unreadable document reports NoPermission, NOT NotFound");
+        check(status != LoadStatus::NotFound,
+              "so MainWindow reaches the elevation branch rather than giving up");
+
+        // Give it back, or QTemporaryDir cannot clean up after itself.
+        QFile::setPermissions(shed.path(),
+                              QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner);
+    }
+
+    std::printf("\n--- and a genuinely absent file still says so ---\n");
+    {
+        Document d;
+        check(d.openPath(QStringLiteral("no-such-document.pdf")) == LoadStatus::NotFound,
+              "a missing document is still NotFound");
+    }
+
     std::printf(fails ? "\n%d CHECK(S) FAILED\n" : "\nALL CHECKS PASSED\n", fails);
     return fails;
 }

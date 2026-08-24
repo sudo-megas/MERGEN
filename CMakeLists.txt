@@ -5,7 +5,7 @@
 cmake_minimum_required(VERSION 3.25)
 
 project(mergen
-    VERSION 2.0.1
+    VERSION 2.0.2
     DESCRIPTION "A minimal PDF viewer"
     HOMEPAGE_URL "https://github.com/sudo-megas/MERGEN"
     LANGUAGES CXX)
