@@ -151,8 +151,16 @@ int Document::pageCount() const {
 namespace {
 
 /// Walks poppler's outline tree depth-first into a flat list.
+/// A table of contents deep enough to exhaust the stack is not one a reader
+/// wrote. Poppler catches cycles; nothing here caught depth, and a document can
+/// choose it freely.
+constexpr int kMaxOutlineDepth = 64;
+
 void flattenOutline(const QVector<Poppler::OutlineItem> &items, int depth,
                     QVector<OutlineEntry> &out) {
+    if (depth > kMaxOutlineDepth) {
+        return;
+    }
     for (const Poppler::OutlineItem &item : items) {
         if (item.isNull()) {
             continue;

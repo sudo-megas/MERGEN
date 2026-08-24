@@ -1152,10 +1152,7 @@ void MainWindow::leaveCompare() {
     updateTitle();
 }
 
-void MainWindow::computeDiff() {
-    if (!isComparing()) {
-        return;
-    }
+QVector<QPair<double, double>> MainWindow::diffBandsFor(int page) const {
     // Rendered small on purpose. This reports that a region changed, not what
     // the change means, and says so rather than implying more precision than a
     // pixel comparison has — MZ.md §9.
@@ -1163,60 +1160,68 @@ void MainWindow::computeDiff() {
     constexpr int kBandRows = 6;
     constexpr int kChannelSlack = 24;
 
-    const int pages = qMin(m_doc->pageCount(), m_compareDoc->pageCount());
-    for (int page = 0; page < pages; ++page) {
-        const QImage left = m_doc->renderPage(page, kDiffScale, Poppler::Page::Rotate0)
-                                .convertToFormat(QImage::Format_RGB32);
-        const QImage right = m_compareDoc->renderPage(page, kDiffScale, Poppler::Page::Rotate0)
-                                 .convertToFormat(QImage::Format_RGB32);
-        if (left.isNull() || right.isNull()) {
-            continue;
-        }
+    if (!m_compareDoc) {
+        return {};
+    }
+    // A page one document has and the other does not is entirely a difference.
+    if (page >= m_compareDoc->pageCount() || page >= m_doc->pageCount()) {
+        return {{0.0, 1.0}};
+    }
 
-        QVector<QPair<double, double>> bands;
-        const int height = qMin(left.height(), right.height());
-        const int width = qMin(left.width(), right.width());
-        bool open = false;
-        double start = 0.0;
+    const QImage left = m_doc->renderPage(page, kDiffScale, Poppler::Page::Rotate0)
+                            .convertToFormat(QImage::Format_RGB32);
+    const QImage right = m_compareDoc->renderPage(page, kDiffScale, Poppler::Page::Rotate0)
+                             .convertToFormat(QImage::Format_RGB32);
+    if (left.isNull() || right.isNull()) {
+        // A render that was refused is not evidence the pages match.
+        return {{0.0, 1.0}};
+    }
 
-        for (int y = 0; y < height; y += kBandRows) {
-            bool differs = left.height() != right.height() || left.width() != right.width();
-            for (int row = y; row < qMin(y + kBandRows, height) && !differs; ++row) {
-                const auto *a = reinterpret_cast<const QRgb *>(left.scanLine(row));
-                const auto *b = reinterpret_cast<const QRgb *>(right.scanLine(row));
-                for (int x = 0; x < width; ++x) {
-                    if (qAbs(qRed(a[x]) - qRed(b[x])) > kChannelSlack ||
-                        qAbs(qGreen(a[x]) - qGreen(b[x])) > kChannelSlack ||
-                        qAbs(qBlue(a[x]) - qBlue(b[x])) > kChannelSlack) {
-                        differs = true;
-                        break;
-                    }
+    QVector<QPair<double, double>> bands;
+    const int height = qMin(left.height(), right.height());
+    const int width = qMin(left.width(), right.width());
+    bool open = false;
+    double start = 0.0;
+
+    for (int y = 0; y < height; y += kBandRows) {
+        bool differs = left.height() != right.height() || left.width() != right.width();
+        for (int row = y; row < qMin(y + kBandRows, height) && !differs; ++row) {
+            const auto *a = reinterpret_cast<const QRgb *>(left.scanLine(row));
+            const auto *b = reinterpret_cast<const QRgb *>(right.scanLine(row));
+            for (int x = 0; x < width; ++x) {
+                if (qAbs(qRed(a[x]) - qRed(b[x])) > kChannelSlack ||
+                    qAbs(qGreen(a[x]) - qGreen(b[x])) > kChannelSlack ||
+                    qAbs(qBlue(a[x]) - qBlue(b[x])) > kChannelSlack) {
+                    differs = true;
+                    break;
                 }
             }
-            const double top = double(y) / height;
-            if (differs && !open) {
-                open = true;
-                start = top;
-            } else if (!differs && open) {
-                open = false;
-                bands.append({start, top});
-            }
         }
-        if (open) {
-            bands.append({start, 1.0});
+        const double top = double(y) / height;
+        if (differs && !open) {
+            open = true;
+            start = top;
+        } else if (!differs && open) {
+            open = false;
+            bands.append({start, top});
         }
+    }
+    if (open) {
+        bands.append({start, 1.0});
+    }
+    return bands;
+}
 
-        m_view->setDiffBands(page, bands);
-        m_compareView->setDiffBands(page, bands);
+void MainWindow::computeDiff() {
+    if (!isComparing()) {
+        return;
     }
-
-    // A document the other does not reach is entirely a difference.
-    for (int page = pages; page < m_doc->pageCount(); ++page) {
-        m_view->setDiffBands(page, {{0.0, 1.0}});
-    }
-    for (int page = pages; page < m_compareDoc->pageCount(); ++page) {
-        m_compareView->setDiffBands(page, {{0.0, 1.0}});
-    }
+    // Nothing is rendered here. Each view asks for a page's marks the first
+    // time it paints that page, so entering a comparison is immediate however
+    // long the documents are.
+    const auto provider = [this](int page) { return diffBandsFor(page); };
+    m_view->setDiffProvider(provider);
+    m_compareView->setDiffProvider(provider);
 }
 
 void MainWindow::setPresenting(bool on) {

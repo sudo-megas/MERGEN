@@ -123,10 +123,16 @@ void Overlay::present(const QString &title, QWidget *content) {
     m_title->setText(title);
     m_title->setVisible(!title.isEmpty());
 
-    // takeWidget hands the old content back unparented, so it must be destroyed
-    // rather than leaked; setWidget alone would not free it.
-    if (QWidget *previous = m_scroll->takeWidget()) {
-        previous->deleteLater();
+    // Anything retired by an earlier present has outlived every loop that could
+    // have been standing on it.
+    delete m_retired;
+
+    // takeWidget hands the old content back unparented. It is kept rather than
+    // deleteLater'd: see m_retired.
+    m_retired = m_scroll->takeWidget();
+    if (m_retired) {
+        m_retired->hide();
+        m_retired->setParent(nullptr);
     }
     m_scroll->setWidget(content);
     // setWidget turns autoFillBackground on, which paints a second rectangle

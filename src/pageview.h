@@ -7,6 +7,8 @@
 #include <QAbstractScrollArea>
 #include <QPointer>
 #include <QTimer>
+
+#include <functional>
 #include <QHash>
 #include <QImage>
 #include <QList>
@@ -109,8 +111,25 @@ public:
     /// Bands of a page, as fractions of its height, where a comparison found a
     /// difference. Fractions rather than pixels so the marks survive a zoom.
     void setDiffBands(int page, const QVector<QPair<double, double>> &bands);
+
+    /// Where the marks for a page come from, asked for the first time that page
+    /// is painted. Comparing used to render every page of both documents before
+    /// showing anything — measured at 9.1 s on a thousand-page pair, on the
+    /// thread that draws, with no progress and no way to stop it.
+    using DiffProvider = std::function<QVector<QPair<double, double>>(int page)>;
+    void setDiffProvider(DiffProvider provider);
     void clearDiffBands();
-    bool hasDiffBands() const { return !m_diffBands.isEmpty(); }
+    /// Whether any difference is actually marked. Not the same as "a
+    /// comparison is running" — pages found identical cache an empty result,
+    /// and MainWindow::isComparing answers the other question.
+    bool hasDiffBands() const {
+        for (const auto &bands : m_diffBands) {
+            if (!bands.isEmpty()) {
+                return true;
+            }
+        }
+        return false;
+    }
 
     void addSearchHit(int page, const QRectF &rect);
     void clearSearchHits();
@@ -275,6 +294,7 @@ private:
     bool m_dragging = false;
 
     QHash<int, QVector<QPair<double, double>>> m_diffBands;
+    DiffProvider m_diffProvider;
 
     /// (page, rect) with the rect in the unrotated page space.
     QList<QPair<int, QRectF>> m_hits;

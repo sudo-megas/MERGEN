@@ -62,6 +62,13 @@ private:
 
     /// Where focus was before the overlay took it, so it can be handed back.
     QPointer<QWidget> m_focusBefore;
+
+    /// The previous contents, held rather than deleteLater'd. A DeferredDelete
+    /// posted while a nested event loop is running is collected BY that loop,
+    /// not deferred past it — which freed a widget underneath its own click
+    /// handler. Retired content is destroyed on the next present, by which
+    /// point no loop can still be standing on it — MZ.md §9.
+    QPointer<QWidget> m_retired;
 };
 
 } // namespace mergen

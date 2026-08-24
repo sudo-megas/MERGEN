@@ -388,14 +388,28 @@ void PageView::setDiffBands(int page, const QVector<QPair<double, double>> &band
     viewport()->update();
 }
 
+void PageView::setDiffProvider(DiffProvider provider) {
+    m_diffProvider = std::move(provider);
+    m_diffBands.clear();
+    viewport()->update();
+}
+
 void PageView::clearDiffBands() {
+    m_diffProvider = nullptr;
     m_diffBands.clear();
     viewport()->update();
 }
 
 void PageView::paintDiffBands(QPainter &painter, int page, const QPoint &origin) {
-    const auto found = m_diffBands.constFind(page);
+    auto found = m_diffBands.constFind(page);
     if (found == m_diffBands.constEnd()) {
+        if (!m_diffProvider) {
+            return;
+        }
+        // Computed the first time this page is looked at, and kept.
+        found = m_diffBands.insert(page, m_diffProvider(page));
+    }
+    if (found.value().isEmpty()) {
         return;
     }
     if (!m_doc) {

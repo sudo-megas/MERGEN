@@ -121,8 +121,11 @@ private:
     void redactSelection();
 
     void chooseComparison();
-    /// Renders both documents small and marks the bands that differ.
+    /// Installs the per-page comparison; nothing is rendered until a page is
+    /// actually looked at.
     void computeDiff();
+    /// The differing bands of one page, as fractions of its height.
+    QVector<QPair<double, double>> diffBandsFor(int page) const;
 
     // Recent files — MX.md §7.
     static QString recentFilePath();
