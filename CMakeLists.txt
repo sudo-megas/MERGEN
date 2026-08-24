@@ -5,7 +5,7 @@
 cmake_minimum_required(VERSION 3.25)
 
 project(mergen
-    VERSION 0.1.4
+    VERSION 0.1.5
     DESCRIPTION "A minimal PDF viewer"
     HOMEPAGE_URL "https://github.com/sudo-megas/MERGEN"
     LANGUAGES CXX)
@@ -25,6 +25,13 @@ find_package(Qt6 6.5 REQUIRED COMPONENTS Widgets PrintSupport)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(POPPLER_QT6 REQUIRED IMPORTED_TARGET poppler-qt6)
 
+# The About dialog carries the licence in full; compile it in rather than
+# depend on a file being present at runtime.
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE" MERGEN_LICENSE_TEXT)
+configure_file(src/license.h.in ${CMAKE_CURRENT_BINARY_DIR}/license.h @ONLY)
+
+set(MERGEN_RELEASE_DATE "2026-08-24" CACHE STRING "Date shown in the About dialog")
+
 # The privileged reader lives beside the binary, not on PATH, and is never
 # installed setuid: polkit decides, not the filesystem.
 set(MERGEN_HELPER_PATH "${CMAKE_INSTALL_FULL_LIBDIR}/mergen/mergen-open"
@@ -42,10 +49,13 @@ add_executable(mergen
 target_compile_definitions(mergen PRIVATE
     MERGEN_VERSION="${PROJECT_VERSION}"
     MERGEN_HELPER_PATH="${MERGEN_HELPER_PATH}"
+    MERGEN_RELEASE_DATE="${MERGEN_RELEASE_DATE}"
     QT_NO_CAST_FROM_ASCII
     QT_DISABLE_DEPRECATED_UP_TO=0x060500)
 
 target_compile_options(mergen PRIVATE -Wall -Wextra -Wpedantic)
+
+target_include_directories(mergen PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 
 target_link_libraries(mergen PRIVATE
     Qt6::Widgets
@@ -62,3 +72,21 @@ install(TARGETS mergen RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(TARGETS mergen-open RUNTIME DESTINATION ${CMAKE_INSTALL_LIBDIR}/mergen)
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/io.github.sudomegas.mergen.policy
     DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/polkit-1/actions)
+
+install(FILES data/mergen.desktop
+    DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/applications)
+
+install(FILES data/mergen.svg
+    DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/scalable/apps
+    RENAME mergen.svg)
+
+# Pre-rasterised so the build needs no SVG renderer, and so QIcon::fromTheme
+# finds the icon without pulling in qt6-svg.
+foreach(size 16 22 24 32 48 64 128 256 512)
+    install(FILES data/icons/mergen-${size}.png
+        DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/${size}x${size}/apps
+        RENAME mergen.png)
+endforeach()
+
+install(FILES LICENSE
+    DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/licenses/mergen)

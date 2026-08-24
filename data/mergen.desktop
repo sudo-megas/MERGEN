@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=MERGEN
+GenericName=PDF Viewer
+Comment=A minimal PDF viewer
+Exec=mergen %f
+Icon=mergen
+Terminal=false
+Categories=Office;Viewer;
+MimeType=application/pdf;
+StartupNotify=true
+StartupWMClass=mergen
+Keywords=PDF;document;viewer;

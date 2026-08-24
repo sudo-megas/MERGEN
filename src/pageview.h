@@ -46,6 +46,7 @@ public:
     void setMessage(const QString &text);
 
     double zoom() const { return m_zoom; }
+    Poppler::Page::Rotation rotation() const { return m_rotation; }
     ZoomMode zoomMode() const { return m_zoomMode; }
 
     void setZoom(double factor);

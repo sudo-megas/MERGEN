@@ -5,6 +5,7 @@
 #include "mainwindow.h"
 #include "document.h"
 #include "pageview.h"
+#include "license.h"
 
 #include <QAction>
 #include <QApplication>
@@ -24,6 +25,12 @@
 #include <QEventLoop>
 #include <QHBoxLayout>
 #include <QKeyEvent>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QPainter>
+#include <QPlainTextEdit>
+#include <QPrintDialog>
+#include <QPrinter>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QThread>
@@ -51,6 +58,10 @@ constexpr char16_t kGlyphPrint = u'';
 constexpr char16_t kGlyphClose = u'';
 
 constexpr int kRecentLimit = 10;
+
+/// Ceiling on print rendering. Above this the image cost climbs fast and the
+/// paper does not improve.
+constexpr int kPrintDpiCap = 600;
 
 QString glyph(char16_t code) {
     return QString(QChar(code));
@@ -239,6 +250,7 @@ void MainWindow::buildToolBar() {
 
     m_printAction = new QAction(this);
     m_printAction->setShortcut(QKeySequence::Print);
+    connect(m_printAction, &QAction::triggered, this, &MainWindow::printDocument);
     addGlyphAction(m_printAction, glyph(kGlyphPrint), tr("Print"));
 
     // Counter-clockwise rotation is a keybinding only; §5 gives the toolbar one
@@ -269,6 +281,13 @@ void MainWindow::buildToolBar() {
     // Return would swallow Enter in the page counter and the search field.
     // They are handled where focus actually is — in the page view's key
     // handler and in the search field's event filter.
+
+    // About has no toolbar button: §5 fixes the toolbar's contents, so it is
+    // reached by the conventional help key instead.
+    auto *aboutAction = new QAction(this);
+    aboutAction->setShortcut(QKeySequence::HelpContents);
+    connect(aboutAction, &QAction::triggered, this, &MainWindow::showAbout);
+    addAction(aboutAction);
 
     m_quitAction = new QAction(this);
     m_quitAction->setShortcut(QKeySequence::Quit);
@@ -501,6 +520,104 @@ void MainWindow::watchDocument(const QString &path) {
     }
 }
 
+
+
+// --- Printing --------------------------------------------------------------
+
+void MainWindow::printDocument() {
+    if (!m_doc->isOpen()) {
+        return;
+    }
+
+    QPrinter printer(QPrinter::HighResolution);
+    printer.setDocName(QFileInfo(m_doc->path()).fileName());
+    printer.setFromTo(1, m_doc->pageCount());
+
+    QPrintDialog dialog(&printer, this);
+    dialog.setOption(QAbstractPrintDialog::PrintPageRange, true);
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+
+    int from = printer.fromPage();
+    int to = printer.toPage();
+    if (from < 1) { // "All pages": the dialog leaves the range at zero.
+        from = 1;
+        to = m_doc->pageCount();
+    }
+    to = qMin(to, m_doc->pageCount());
+
+    // The printer's own resolution, not the screen cache — but capped, because
+    // a full A4 at 1200 dpi is a 550 MB image and a spool file to match, and
+    // nothing on paper is better for it.
+    const double dpi = qMin<double>(printer.resolution(), kPrintDpiCap);
+    const double scale = dpi / 72.0;
+    const Poppler::Page::Rotation rotation = m_view->rotation();
+
+    QPainter painter;
+    if (!painter.begin(&printer)) {
+        return;
+    }
+
+    for (int page = from; page <= to; ++page) {
+        if (page != from && !printer.newPage()) {
+            break;
+        }
+        const QImage image = m_doc->renderPage(page - 1, scale, rotation);
+        if (image.isNull()) {
+            continue;
+        }
+        // Fit the page to the paper, keeping its proportions.
+        const QRect paper = painter.viewport();
+        QSize target = image.size();
+        target.scale(paper.size(), Qt::KeepAspectRatio);
+        const QRect placed(paper.x() + (paper.width() - target.width()) / 2,
+                           paper.y() + (paper.height() - target.height()) / 2, target.width(),
+                           target.height());
+        painter.drawImage(placed, image);
+    }
+    painter.end();
+}
+
+// --- About -----------------------------------------------------------------
+
+void MainWindow::showAbout() {
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("About MERGEN"));
+
+    auto *column = new QVBoxLayout(&dialog);
+
+    // Plain text throughout, and no link handling anywhere: the address is
+    // there to be read and copied, never to open a browser. MX.md §4.
+    auto *heading = new QLabel(&dialog);
+    heading->setTextFormat(Qt::PlainText);
+    heading->setTextInteractionFlags(Qt::TextSelectableByMouse |
+                                     Qt::TextSelectableByKeyboard);
+    heading->setText(tr("MERGEN %1\n"
+                        "A minimal PDF viewer\n\n"
+                        "Made by MEGAS\n"
+                        "Released %2\n"
+                        "Source: github.com/sudo-megas/MERGEN\n\n"
+                        "Licensed under the GNU General Public License, version 3.")
+                         .arg(QStringLiteral(MERGEN_VERSION))
+                         .arg(QStringLiteral(MERGEN_RELEASE_DATE)));
+    column->addWidget(heading);
+
+    auto *licence = new QPlainTextEdit(&dialog);
+    licence->setReadOnly(true);
+    licence->setPlainText(QString::fromUtf8(kLicenseText));
+    licence->setLineWrapMode(QPlainTextEdit::NoWrap);
+    licence->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+    licence->setMinimumSize(640, 360);
+    column->addWidget(licence, 1);
+
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    column->addWidget(buttons);
+
+    dialog.exec();
+}
 
 // --- Search ----------------------------------------------------------------
 

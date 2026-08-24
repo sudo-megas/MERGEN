@@ -1,0 +1,14 @@
+// MERGEN — a minimal PDF viewer.
+// Copyright (C) 2026 MEGAS.
+// SPDX-License-Identifier: GPL-3.0-only
+//
+// Generated from LICENSE at configure time. The About dialog shows the licence
+// in full, so the text is compiled in rather than read from disk at runtime.
+
+#pragma once
+
+namespace mergen {
+
+inline constexpr const char *kLicenseText = R"MERGENLICENCE(@MERGEN_LICENSE_TEXT@)MERGENLICENCE";
+
+} // namespace mergen

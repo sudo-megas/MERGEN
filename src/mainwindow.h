@@ -50,6 +50,8 @@ private:
     void showError(const QString &message);
 
     // Actions.
+    void printDocument();
+    void showAbout();
     void chooseFile();
     void reloadDocument();
     void jumpToTypedPage();

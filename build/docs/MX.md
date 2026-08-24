@@ -66,6 +66,11 @@ Written for and tested on: Arch Linux, Wayland, Niri, `prefer-no-csd` enabled.
 
 Build-time only: `cmake`, `ninja`, `gcc`.
 
+The application icon ships as SVG for the scalable theme directory and as PNGs
+for the fixed sizes, rasterised once and committed. That keeps a renderer out of
+the build and `qt6-svg` out of the runtime — Qt cannot load an SVG icon without
+it — for the cost of nine small files in the repository.
+
 Nothing else. No KF6, no GTK, no glib, no network library, no database.
 
 CUPS arrives indirectly through `qt6-base`'s print support and is accepted
@@ -182,6 +187,10 @@ hits are derived at runtime from the highlight colour — hue rotated 180°, alp
 ~40% — so they always contrast with both the selection and the page without a
 hardcoded value. There is no theming code and no palette switcher.
 
+**About** has no toolbar button — the toolbar's contents are fixed above — and
+there is no menu bar to hang it from, so it is reached by <kbd>F1</kbd>, the
+usual key for it. It is the one dialog MERGEN raises that is not a prompt.
+
 **Decorations** are drawn by the compositor. MERGEN draws none.
 
 **Empty state.** Launched with no argument, MERGEN shows an empty page view with
@@ -244,6 +253,7 @@ Standard desktop conventions. No vim-style bindings anywhere.
 | <kbd>Ctrl</kbd>+<kbd>O</kbd> | Open file |
 | <kbd>Ctrl</kbd>+<kbd>P</kbd> | Print |
 | <kbd>Ctrl</kbd>+<kbd>Q</kbd> | Quit |
+| <kbd>F1</kbd> | About |
 
 ---
 
@@ -358,7 +368,16 @@ come back on the helper's standard output and go to
 
 **Printing.** `QPrintDialog` supplies the page range; MERGEN honours it and
 renders each selected page at the printer's resolution rather than reusing the
-screen cache.
+screen cache, then fits it to the paper keeping its proportions. The resolution
+is capped at 600 dpi: a printer reporting 1200 dpi would otherwise mean a
+550 MB image per A4 page and a spool file to match, and nothing on the paper is
+better for it. Printing follows the rotation currently on screen, so what is
+printed is what is being looked at.
+
+The About dialog carries the licence in full, so the text is compiled in from
+`LICENSE` at configure time rather than read from disk at runtime. The whole
+dialog is plain text with no link handling anywhere — the source address is
+there to be read and copied, never to open a browser.
 
 **Threading.** v1.0 renders synchronously on the main thread. If large pages
 feel sluggish in practice, move rendering to a `QThreadPool` — but only after
