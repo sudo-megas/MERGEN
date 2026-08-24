@@ -1,0 +1,49 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
+
+    steps:
+      - name: Install the toolchain
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --needed --noconfirm \
+            git cmake ninja gcc github-cli \
+            qt6-base poppler-qt6 polkit ttf-cascadia-code-nerd
+
+      - name: Fetch the tagged tree
+        run: |
+          git clone --depth 1 --branch "$GITHUB_REF_NAME" \
+            "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" checkout
+          cp checkout/PKGBUILD .
+
+      - name: Build the package
+        run: |
+          # makepkg refuses to run as root, and this container is root.
+          useradd -m builder
+          chown -R builder:builder .
+          sudo -u builder makepkg --noconfirm
+          ls -la ./*.pkg.tar.zst
+
+      - name: Publish to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create "$GITHUB_REF_NAME" \
+                 --repo "$GITHUB_REPOSITORY" \
+                 --title "MERGEN $GITHUB_REF_NAME" \
+                 --notes "A minimal PDF viewer for Arch Linux. Wayland only."
+          gh release upload "$GITHUB_REF_NAME" ./*.pkg.tar.zst \
+            --repo "$GITHUB_REPOSITORY" --clobber

@@ -533,14 +533,32 @@ git tag v0.1.5
 The only milestone that pushes, builds a package, or publishes anything.
 
 1. Write `PKGBUILD` — `pkgname=mergen`,
-   `depends=('qt6-base' 'poppler-qt6' 'polkit' 'ttf-cascadia-code-nerd')`,
-   `makedepends=('cmake' 'ninja' 'gcc')`, `arch=('x86_64')`, `license=('GPL3')`,
-   standard `build()` and `package()` functions.
+   `depends=('qt6-base' 'poppler-qt6' 'polkit' 'ttf-cascadia-code-nerd' 'hicolor-icon-theme')`,
+   `makedepends=('cmake' 'ninja' 'gcc' 'git')`, `arch=('x86_64')`,
+   `license=('GPL-3.0-only')`, standard `build()` and `package()` functions.
+
+   Four corrections to what this section first said. The runtime dependency is
+   `poppler-qt6`, not `poppler`: it is `libpoppler-qt6` that gets linked.
+   `polkit` is there for the elevation helper, per §2. `hicolor-icon-theme` is
+   there because the package owns directories in that theme's hierarchy, which
+   namcap rightly calls an error otherwise. And the licence is written in its
+   SPDX form, which is what current Arch tooling expects; `GPL3` is the retired
+   spelling of the same licence.
+
+   The source is the git tag rather than a release tarball, so integrity comes
+   from the tag and `SKIP` is the correct checksum. That also removes a
+   circularity: a tarball checksum cannot be committed before the tag that
+   produces the tarball exists.
 2. Test the package locally in a clean chroot:
 
 ```bash
 extra-x86_64-build
 ```
+
+Before the tag is pushed there is nothing for the git source to clone, so this
+first pass runs against a tarball made with `git archive` from the same tree,
+which is what proves `build()` and `package()` are right. The pass is repeated
+against the real git source once the tag is up.
 
 3. Install and smoke-test the built package:
 
