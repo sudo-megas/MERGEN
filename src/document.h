@@ -15,6 +15,7 @@
 #include <QVector>
 
 #include <memory>
+#include <optional>
 
 #include <poppler-qt6.h>
 
@@ -171,6 +172,9 @@ private:
     QString m_path;
     QByteArray m_data;
     mutable QString m_hash;
+    /// properties() walks the whole font table; the answer cannot change while
+    /// the document is open, so it is computed once.
+    mutable std::optional<DocumentProperties> m_properties;
     bool m_locked = false;
 };
 
@@ -202,6 +206,9 @@ private:
     QString m_path;
     QByteArray m_data;
     mutable QString m_hash;
+    /// properties() walks the whole font table; the answer cannot change while
+    /// the document is open, so it is computed once.
+    mutable std::optional<DocumentProperties> m_properties;
     bool m_locked = false;
     QString m_needle;
     QAtomicInt m_cancelled{0};

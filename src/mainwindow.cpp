@@ -51,6 +51,8 @@
 #include <QProcess>
 #include <QSaveFile>
 #include <QStandardPaths>
+
+#include <sys/stat.h>
 #include <QToolBar>
 #include <QToolButton>
 #include <QWidget>
@@ -61,6 +63,11 @@ namespace mergen {
 namespace {
 
 constexpr int kRecentLimit = 10;
+
+/// A ceiling on portals, for the same reason recent.toml has one: the whole
+/// store is rewritten on every save, and an unbounded one is loaded in full at
+/// every launch.
+constexpr int kPortalLimit = 512;
 
 /// Ceiling on print rendering. Above this the image cost climbs fast and the
 /// paper does not improve.
@@ -750,6 +757,12 @@ QString MainWindow::runCommand(const QString &verb, const QString &argument) {
         if (argument.isEmpty()) {
             return err(QStringLiteral("open needs a path"));
         }
+        // openPath refuses to re-enter itself while a prompt is up, and used to
+        // return quietly — so the socket answered "ok" to an open that never
+        // happened, for any path at all.
+        if (m_opening) {
+            return err(QStringLiteral("busy opening another document"));
+        }
         openPath(argument);
         // Raising is the point of handing a file to a running instance: the
         // reader asked for this document to be in front of them.
@@ -816,18 +829,38 @@ void MainWindow::loadPortals() {
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
         return;
     }
-    Portal current;
-    int ends = 0;
+
+    // A portal is read as a record rather than by counting keys. The previous
+    // loader advanced from one end to the other only when it saw "page", so a
+    // reordered, missing or duplicated line silently destroyed both ends —
+    // permanently, on the next save.
+    QVector<PortalEnd> ends;
+    PortalEnd building;
+    bool started = false;
+    int seen = 0;
+
+    const auto finishEnd = [&] {
+        if (started && seen > 0 && ends.size() < 2) {
+            ends.append(building);
+        }
+        building = PortalEnd();
+        started = false;
+        seen = 0;
+    };
+    const auto finishPortal = [&] {
+        finishEnd();
+        // Both ends or neither: a half-written portal goes nowhere, and
+        // keeping it would be keeping a link with one side missing.
+        if (ends.size() == 2) {
+            m_portals.append({ends.at(0), ends.at(1)});
+        }
+        ends.clear();
+    };
+
     while (!file.atEnd()) {
         const QString line = QString::fromUtf8(file.readLine()).trimmed();
         if (line == QLatin1String("[[portal]]")) {
-            // A portal needs both ends; a half-written one is dropped rather
-            // than kept as something that goes nowhere.
-            if (ends == 2) {
-                m_portals.append(current);
-            }
-            current = Portal();
-            ends = 0;
+            finishPortal();
             continue;
         }
         const int eq = line.indexOf(QLatin1Char('='));
@@ -840,18 +873,38 @@ void MainWindow::loadPortals() {
             value.size() >= 2) {
             value = tomlUnescape(value.mid(1, value.size() - 2));
         }
-        PortalEnd &end = ends == 0 ? current.a : current.b;
+
+        // A key repeating means the previous end is complete, whatever order
+        // its lines arrived in.
+        const bool repeat = (key == QLatin1String("hash") && !building.hash.isEmpty()) ||
+                            (key == QLatin1String("path") && !building.path.isEmpty()) ||
+                            (key == QLatin1String("page") && seen > 0 &&
+                             building.hash.isEmpty() == building.path.isEmpty() && seen >= 3);
+        if (repeat) {
+            finishEnd();
+        }
+
         if (key == QLatin1String("hash")) {
-            end.hash = value;
+            building.hash = value;
         } else if (key == QLatin1String("path")) {
-            end.path = value;
+            building.path = value;
         } else if (key == QLatin1String("page")) {
-            end.page = value.toInt();
-            ++ends;
+            building.page = value.toInt();
+        } else {
+            continue;
+        }
+        started = true;
+        ++seen;
+        if (seen >= 3) {
+            finishEnd();
         }
     }
-    if (ends == 2) {
-        m_portals.append(current);
+    finishPortal();
+
+    // Bounded, the way recent.toml is. A store that only grows is a store that
+    // is eventually rewritten in full on every save.
+    if (m_portals.size() > kPortalLimit) {
+        m_portals.remove(0, m_portals.size() - kPortalLimit);
     }
 }
 
@@ -1522,11 +1575,45 @@ void MainWindow::printDocument() {
 
     int from = printer.fromPage();
     int to = printer.toPage();
-    if (from < 1) { // "All pages": the dialog leaves the range at zero.
+
+    // printRange() was never read, so "Current page" and "Selection" both fell
+    // through to the all-pages branch and printed the whole document.
+    switch (printer.printRange()) {
+    case QPrinter::CurrentPage:
+        from = m_view->currentPage() + 1;
+        to = from;
+        break;
+    case QPrinter::PageRange:
+        break;
+    case QPrinter::AllPages:
+    case QPrinter::Selection:
+    default:
+        from = 1;
+        to = m_doc->pageCount();
+        break;
+    }
+
+    if (from < 1) { // The dialog leaves the range at zero for "all".
         from = 1;
         to = m_doc->pageCount();
     }
-    to = qMin(to, m_doc->pageCount());
+    // Both ends, not just the far one: an out-of-range start used to emit a
+    // single blank sheet and say nothing.
+    from = qBound(1, from, m_doc->pageCount());
+    to = qBound(from, to, m_doc->pageCount());
+
+    // Printing to a file must not land on the document being read. Redaction
+    // is held to this in §8; printing was not.
+    if (printer.outputFormat() == QPrinter::PdfFormat && !printer.outputFileName().isEmpty()) {
+        struct stat out{};
+        struct stat src{};
+        if (::stat(printer.outputFileName().toLocal8Bit().constData(), &out) == 0 &&
+            ::stat(m_doc->path().toLocal8Bit().constData(), &src) == 0 &&
+            out.st_dev == src.st_dev && out.st_ino == src.st_ino) {
+            m_view->setNotice(tr("That is the document you are reading. Choose another name."));
+            return;
+        }
+    }
 
     // The printer's own resolution, not the screen cache — but capped, because
     // a full A4 at 1200 dpi is a 550 MB image and a spool file to match, and

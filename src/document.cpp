@@ -47,6 +47,7 @@ LoadStatus Document::openPath(const QString &path, const QByteArray &password) {
         m_path = info.absoluteFilePath();
         m_data.clear();
         m_hash.clear();
+        m_properties.reset();
     }
     return status;
 }
@@ -140,6 +141,7 @@ void Document::close() {
     m_path.clear();
     wipeData();
     m_hash.clear();
+    m_properties.reset();
 }
 
 int Document::pageCount() const {
@@ -247,6 +249,12 @@ DocumentProperties Document::properties() const {
     DocumentProperties out;
     if (!isOpen()) {
         return out;
+    }
+    // fonts() scans every page. On a font-heavy document that measured minutes,
+    // synchronously, from a keystroke — and again on every repeat because
+    // nothing was kept.
+    if (m_properties) {
+        return *m_properties;
     }
 
     const auto row = [&out](const QString &name, const QString &value) {
@@ -367,6 +375,7 @@ DocumentProperties Document::properties() const {
             "This document has files attached to it. MERGEN does not open them.");
     }
 
+    m_properties = out;
     return out;
 }
 
