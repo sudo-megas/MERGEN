@@ -84,6 +84,31 @@ Presence statPresence(const QString &path, struct stat *st) {
         return Presence::Unreadable;
     }
 }
+
+/// How many Documents currently hold privileged plaintext.
+///
+/// PR_SET_DUMPABLE is a property of the process, not of a document, and since
+/// Z12 a comparison may authenticate too — so there can be two. Counted rather
+/// than set and cleared: the second document closing must not re-enable core
+/// dumps while the first is still holding a file this account may not read.
+/// Main thread only, which is where Documents are made and closed; the search
+/// worker keeps its own copy and never touches this.
+int g_elevated = 0;
+
+void retainElevated() {
+    if (g_elevated++ == 0) {
+        // While a privileged document is resident, a core dump would write its
+        // plaintext to disk — one authentication becoming a permanent
+        // unauthenticated copy. MZ.md §8 says nothing else is persisted.
+        ::prctl(PR_SET_DUMPABLE, 0, 0, 0, 0);
+    }
+}
+
+void releaseElevated() {
+    if (g_elevated > 0 && --g_elevated == 0) {
+        ::prctl(PR_SET_DUMPABLE, 1, 0, 0, 0);
+    }
+}
 } // namespace
 
 Presence presenceOf(const QString &path) {
@@ -92,7 +117,14 @@ Presence presenceOf(const QString &path) {
 }
 
 Document::Document() = default;
-Document::~Document() = default;
+
+/// Not `= default`. A comparison document is released by resetting the pointer
+/// that owns it, never through close(), so a defaulted destructor handed its
+/// privileged plaintext back to the allocator intact. The main document reaches
+/// the same path when the window is destroyed with a document still open.
+Document::~Document() {
+    wipeData();
+}
 
 LoadStatus Document::openPath(const QString &path, const QByteArray &password) {
     const QFileInfo info(path);
@@ -132,7 +164,11 @@ LoadStatus Document::openPath(const QString &path, const QByteArray &password) {
     const LoadStatus status = adopt(std::move(doc), password);
     if (status == LoadStatus::Ok || status == LoadStatus::NeedsPassword) {
         m_path = info.absoluteFilePath();
-        m_data.clear();
+        // wipeData, not clear: this object may have been holding a privileged
+        // document a moment ago, and clear() drops that plaintext into freed
+        // heap without erasing it. Opening any ordinary file afterwards was
+        // enough to do it.
+        wipeData();
         m_hash.clear();
         m_properties.reset();
     }
@@ -153,11 +189,22 @@ LoadStatus Document::openData(const QByteArray &bytes, const QString &path,
     const LoadStatus status = adopt(std::move(doc), password);
     if (status == LoadStatus::Ok || status == LoadStatus::NeedsPassword) {
         m_path = QFileInfo(path).absoluteFilePath();
+        // Both of these were missing, and openPath has always cleared them. A
+        // Document is reused for every open, and openPath returns NoPermission
+        // before it touches any state — so the privileged document that arrived
+        // here inherited the *previous* file's cached hash and properties. The
+        // properties overlay described the wrong document, and a portal made in
+        // this one was keyed by the other's content, which is precisely the
+        // silent attachment to a different file that keying by hash exists to
+        // prevent.
+        m_hash.clear();
+        m_properties.reset();
+        // Wipe before taking the new bytes: a second privileged open on this
+        // object would otherwise abandon the first document's plaintext
+        // unzeroed and count its elevation twice.
+        wipeData();
         m_data = bytes;
-        // While a privileged document is resident, a core dump would write its
-        // plaintext to disk — one authentication becoming a permanent
-        // unauthenticated copy. MZ.md §8 says nothing else is persisted.
-        ::prctl(PR_SET_DUMPABLE, 0, 0, 0, 0);
+        retainElevated();
     }
     return status;
 }
@@ -213,13 +260,15 @@ bool Document::unlock(const QByteArray &password) {
 }
 
 void Document::wipeData() {
-    if (!m_data.isEmpty()) {
-        // data() detaches first, so this erases the buffer this object owns.
-        std::memset(m_data.data(), 0, static_cast<size_t>(m_data.size()));
+    if (m_data.isEmpty()) {
+        return;
     }
+    // data() detaches first, so this erases the buffer this object owns.
+    std::memset(m_data.data(), 0, static_cast<size_t>(m_data.size()));
     m_data.clear();
-    // Nothing privileged is held any more, so the process may be dumped again.
-    ::prctl(PR_SET_DUMPABLE, 1, 0, 0, 0);
+    // Dumpable again only once no document holds privileged plaintext — this is
+    // the last one out, not merely one of them.
+    releaseElevated();
 }
 
 void Document::close() {

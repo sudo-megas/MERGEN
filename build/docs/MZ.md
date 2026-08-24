@@ -1106,27 +1106,55 @@ not ruled the same way:
 If that trade is ever revisited, the thing to change is the clipboard, not the
 other two.
 
-**Whether a comparison may authenticate.** Found at 2.0.4 and deliberately not
-built. `enterCompare` calls `Document::openPath` directly and stops at whatever
-it returns, so a root-owned document cannot be the far side of a comparison —
-the main window offers to authenticate for it and the comparison does not, which
-is a difference the reader has no way to explain.
+**Whether a comparison may authenticate — ruled yes at 2.0.6.** Raised at 2.0.4
+and left open there. `enterCompare` called `Document::openPath` and stopped at
+whatever it returned, so a root-owned document could not be the far side of a
+comparison: the main window offered to authenticate for it and the comparison
+did not, a difference the reader had no way to explain.
 
-The reading is defensible on its own terms: a comparison puts a document on
-screen and nowhere else, which is what §13 already permits above. But it is not
-a patch, and it is written here rather than done for two reasons. The first is
-that `m_compareDoc` would then hold elevated plaintext, and both guards that
-keep such plaintext off disk — redaction and print-to-file — test `m_doc->data()`
-only, so each would need to consider the second document or be quietly wrong for
-it. The second is that the practical route in is the file dialog, which cannot
-list a directory it cannot traverse; the gap is real but nearly unreachable, and
-that is an argument for ruling on it rather than for reaching for it in a
-point release.
+The ruling is yes, and the reason is the one already given above for the
+clipboard. A comparison puts a document on screen and does nothing else with it,
+which is what reading one does; the guarantee this section makes is that MERGEN
+will not *write a file*, not that an authenticated reader may only look at one
+document at a time. No route out of the process is opened by it — printing still
+prints the near document, redaction still refuses an elevated one, and neither
+ever touched `m_compareDoc`.
 
-What it needs, if ruled yes: the `NoPermission` branch from `MainWindow::openPath`
-repeated for the comparison document, both plaintext guards widened to whichever
-document is elevated, and `leaveCompare` wiping the second buffer the way
-`close()` wipes the first.
+Three things were needed, and the second and third were the reason this was a
+ruling rather than a patch:
+
+- The `NoPermission` branch from `MainWindow::openPath`, repeated for the
+  comparison document, under the same `m_opening` flag. `readElevated` runs a
+  nested event loop and the control socket keeps answering through it, so a
+  socket `open` arriving during the password prompt would call `openPath`, which
+  calls `leaveCompare`, which resets the document being built — the shape of the
+  Z11 crash, in a new place.
+- `PR_SET_DUMPABLE` counted rather than set and cleared. It is a property of the
+  process and there can now be two elevated documents; clearing it when the first
+  closes would re-enable core dumps while the second still held plaintext.
+- `~Document` wiping. A comparison document is released by resetting the pointer
+  that owns it and never goes through `close()`, so the defaulted destructor
+  handed its plaintext back to the allocator intact. The main document reached
+  the same path whenever the window was destroyed with a document still open.
+
+> [!NOTE]
+> Two defects surfaced while ruling this, both older than the ruling and both in
+> the privileged path.
+>
+> `openData` never cleared `m_hash` or `m_properties`, which `openPath` has
+> always cleared — and `openPath` returns `NoPermission` before it touches any
+> state, so a privileged document arriving through `openData` inherited the
+> *previous* file's cached hash and properties. The properties overlay described
+> the wrong document, and worse, a portal made in the privileged one was keyed by
+> the other's content hash. An elevated document is deliberately not hashed at
+> all (§8: that digest would be written to `portals.toml`, and a digest of
+> privileged content does not belong in an unprivileged state file) — so the
+> correct answer was no hash, and the answer given was another file's.
+>
+> `openPath` cleared `m_data` with `QByteArray::clear()` rather than `wipeData()`.
+> Opening any ordinary document after a privileged one therefore released the
+> privileged plaintext to the allocator without erasing it, which is the one
+> thing `wipeData` exists to prevent.
 
 **An opt-out for motion.** Motion is unconditional because Qt offers nothing on
 this platform to condition it on — see the amendment in §9. A reader who wants

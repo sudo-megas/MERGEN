@@ -1,7 +1,7 @@
 # Maintainer: MEGAS <halil@namli.xyz>
 
 pkgname=mergen
-pkgver=2.0.5
+pkgver=2.0.6
 pkgrel=1
 pkgdesc='A minimal PDF viewer'
 arch=('x86_64')

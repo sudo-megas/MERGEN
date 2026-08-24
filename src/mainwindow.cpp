@@ -1605,14 +1605,42 @@ void MainWindow::enterCompare(const QString &path) {
     if (isComparing() || !m_doc->isOpen()) {
         return;
     }
+    // readElevated runs a nested event loop for the pkexec dialog, and the
+    // control socket keeps answering through it. A socket "open" arriving then
+    // calls openPath, which calls leaveCompare, which resets the very document
+    // being built here. Held under the same flag openPath uses, so the socket
+    // reports "busy opening another document" instead — MZ.md §9.
+    if (m_opening) {
+        return;
+    }
+    m_opening = true;
+    const QScopeGuard done([this] { m_opening = false; });
 
-    m_compareDoc = std::make_unique<Document>();
-    if (m_compareDoc->openPath(path) != LoadStatus::Ok) {
-        m_compareDoc.reset();
+    auto candidate = std::make_unique<Document>();
+    LoadStatus status = candidate->openPath(path);
+
+    if (status == LoadStatus::NoPermission) {
+        // A comparison shows a document and does nothing else with it, which is
+        // the same thing reading one does — so the offer to authenticate is the
+        // same offer. §13 ruled this at Z12; what it refuses is writing a file,
+        // and no route out of this process is opened here.
+        QString error;
+        const QByteArray bytes = readElevated(QFileInfo(path).absoluteFilePath(), &error);
+        if (!bytes.isEmpty()) {
+            status = candidate->openData(bytes, QFileInfo(path).absoluteFilePath());
+        }
+    }
+
+    if (status != LoadStatus::Ok) {
         m_view->setNotice(
             tr("%1 could not be opened for comparison.").arg(QFileInfo(path).fileName()));
         return;
     }
+
+    // Adopted only once it is genuinely open, so there is no window in which
+    // m_compareDoc points at a document that failed to load — and nothing to
+    // undo on the failure path.
+    m_compareDoc = std::move(candidate);
 
     // The previews step aside for a comparison. Two documents side by side want
     // the whole row, and a strip that could only ever preview one of them would

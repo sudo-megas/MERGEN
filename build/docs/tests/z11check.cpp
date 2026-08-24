@@ -21,6 +21,7 @@
 #include <QEventLoop>
 #include <QTimer>
 #include <cstdio>
+#include <sys/prctl.h>
 using namespace mergen;
 int fails = 0;
 static void check(bool ok, const QString &what) {
@@ -397,6 +398,127 @@ int main(int argc, char **argv) {
         QFile::setPermissions(shed.path(),
                               QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner);
         qunsetenv("XDG_STATE_HOME");
+    }
+
+    std::printf("\n--- a reused Document does not inherit the last one's identity ---\n");
+    {
+        // openPath clears the cached hash and properties; openData did not, and
+        // openPath returns NoPermission before it touches any state. So the
+        // privileged document that arrived through openData carried the
+        // PREVIOUS file's hash and properties: the properties overlay described
+        // the wrong document, and a portal made in this one was keyed by the
+        // other's content — the silent attachment to a different file that
+        // keying by hash exists to prevent.
+        Document d;
+        check(d.openPath(QStringLiteral("test.pdf")) == LoadStatus::Ok, "an ordinary document");
+        const QString firstHash = d.contentHash();
+        const int firstPages = d.pageCount();
+        check(!firstHash.isEmpty(), "its hash is computed and cached");
+        d.properties();
+
+        // annot.pdf is one page where test.pdf is three, so a page count carried
+        // over from the previous document is visible rather than coincidental.
+        QFile other(QStringLiteral("annot.pdf"));
+        check(other.open(QIODevice::ReadOnly), "a different document, as bytes");
+        const QByteArray bytes = other.readAll();
+        check(d.openData(bytes, QStringLiteral("annot.pdf")) == LoadStatus::Ok,
+              "reopened through openData, as the elevation path does");
+
+        std::printf("      hash before %s, after %s\n", qPrintable(firstHash.left(12)),
+                    d.contentHash().isEmpty() ? "(none)" : qPrintable(d.contentHash().left(12)));
+
+        // A document that arrived through openData is deliberately NOT hashed:
+        // the digest is written to portals.toml, and a digest of privileged
+        // content does not belong in an unprivileged state file. So the right
+        // answer is no hash at all — and the wrong answer, the one that shipped,
+        // was the PREVIOUS document's, which would have keyed a portal made in
+        // this document to a different file entirely.
+        check(d.contentHash() != firstHash, "it is not the old document's hash");
+        check(d.contentHash().isEmpty(), "an elevated document has no hash, by design");
+
+        Document fresh;
+        fresh.openPath(QStringLiteral("annot.pdf"));
+        std::printf("      pages before %d, after %d\n", firstPages, d.pageCount());
+        check(d.pageCount() == fresh.pageCount(),
+              "and the page count is the new document's, not the old one's");
+        check(firstPages != d.pageCount(), "which is visibly not what was open before");
+    }
+
+    std::printf("\n--- a comparison may authenticate, and is wiped when it ends ---\n");
+    {
+        MainWindow w;
+        w.openPath(QStringLiteral("test.pdf"));
+        settle();
+        check(!w.isComparing(), "not comparing yet");
+
+        // The far side opens by path when it is readable.
+        w.enterCompare(QStringLiteral("outline.pdf"));
+        settle();
+        check(w.isComparing(), "an ordinary document can be compared");
+        w.leaveCompare();
+        settle();
+        check(!w.isComparing(), "and the comparison ends");
+
+        // An unreadable far side must reach the elevation branch rather than
+        // being refused outright. pkexec cannot be driven from a test, so what
+        // is checked here is that it is ATTEMPTED — openPath must have said
+        // NoPermission rather than NotFound, which is what 2.0.2 fixed and what
+        // enterCompare now acts on.
+        QTemporaryDir shed;
+        const QString hidden = shed.path() + QStringLiteral("/far.pdf");
+        QFile::copy(QStringLiteral("outline.pdf"), hidden);
+        QFile::setPermissions(shed.path(), QFile::ReadOwner | QFile::WriteOwner);
+
+        Document probe;
+        check(probe.openPath(hidden) == LoadStatus::NoPermission,
+              "the far side reports NoPermission, so enterCompare offers pkexec");
+
+        QFile::setPermissions(shed.path(),
+                              QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner);
+    }
+
+    std::printf("\n--- privileged bytes are erased, not merely released ---\n");
+    {
+        QFile f(QStringLiteral("test.pdf"));
+        check(f.open(QIODevice::ReadOnly), "bytes to stand in for a privileged read");
+        const QByteArray bytes = f.readAll();
+
+        // openPath after openData used to call m_data.clear(), handing the
+        // plaintext back to the allocator intact.
+        Document d;
+        check(d.openData(bytes, QStringLiteral("test.pdf")) == LoadStatus::Ok,
+              "opened as an elevated document");
+        check(!d.data().isEmpty(), "it holds its bytes");
+        check(d.openPath(QStringLiteral("outline.pdf")) == LoadStatus::Ok,
+              "then an ordinary document is opened over it");
+        check(d.data().isEmpty(), "the privileged bytes are gone from the document");
+
+        // The dumpable flag is the observable half of all this. It is a property
+        // of the PROCESS, so with two elevated documents — which a comparison
+        // now makes possible — clearing it on the first close would re-enable
+        // core dumps while the second still holds plaintext this account may not
+        // read. Counted since Z12; this is what proves the count.
+        auto dumpable = [] { return ::prctl(PR_GET_DUMPABLE, 0, 0, 0, 0); };
+        check(dumpable() == 1, "dumpable to begin with, nothing privileged held");
+
+        auto first = std::make_unique<Document>();
+        check(first->openData(bytes, QStringLiteral("test.pdf")) == LoadStatus::Ok,
+              "one elevated document");
+        check(dumpable() == 0, "core dumps are off");
+
+        auto second = std::make_unique<Document>();
+        check(second->openData(bytes, QStringLiteral("test.pdf")) == LoadStatus::Ok,
+              "a second, as a comparison against a root-owned file makes");
+        check(dumpable() == 0, "still off");
+
+        // Released by resetting the owner — the only route a comparison
+        // document takes, since leaveCompare never calls close().
+        second.reset();
+        check(dumpable() == 0,
+              "STILL off after one closes, because the other is still holding plaintext");
+
+        first.reset();
+        check(dumpable() == 1, "and dumpable again only once the last one is gone");
     }
 
     std::printf(fails ? "\n%d CHECK(S) FAILED\n" : "\nALL CHECKS PASSED\n", fails);
