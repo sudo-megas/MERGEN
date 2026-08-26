@@ -26,6 +26,21 @@ export DEB_BUILD_MAINT_OPTIONS = hardening=+all
 %:
 	dh $@ --buildsystem=cmake+ninja
 
+# Nothing to run, and dh must be told so rather than left to assume.
+#
+# The default dh_auto_test invokes `ninja test` on a CMake build, which needs a
+# `test` target, which needs enable_testing() — and CMakeLists.txt does not call
+# it. ninja answers "unknown target 'test'" and the build fails after compiling
+# and linking cleanly, which reads like a packaging fault and is not one.
+#
+# The acceptance suites are real but they are not CTest: build/docs/tests/
+# run-all.sh compiles and drives them, and it refuses to run as root because
+# several checks turn on a directory the account cannot traverse. A package
+# build is root and has no unprivileged account to hand, so this is the wrong
+# place to run them from. audit.yml runs them in a job of their own, as a user
+# who can fail them.
+override_dh_auto_test:
+
 # CMakeLists.txt installs the licence at /usr/share/licenses/mergen/LICENSE,
 # which is where Arch keeps it. On Debian the file of record is
 # /usr/share/doc/mergen/copyright, which dh_installdocs writes from
