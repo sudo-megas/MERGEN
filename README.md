@@ -3,7 +3,7 @@
 </p>
 
 <h1 align="center">MERGEN</h1>
-<p align="center"><strong>A minimal PDF viewer for Arch Linux</strong></p>
+<p align="center"><strong>A minimal PDF viewer for Arch Linux and Debian</strong></p>
 
 <p align="center">
   <img alt="Arch Linux package" src="https://img.shields.io/badge/Arch%20Linux-352%20KB-1793D1?style=for-the-badge&logo=archlinux&logoColor=white">
