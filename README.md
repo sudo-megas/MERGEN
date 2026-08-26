@@ -7,7 +7,7 @@
 
 <p align="center">
   <img alt="Arch Linux package" src="https://img.shields.io/badge/Arch%20Linux-352%20KB-1793D1?style=for-the-badge&logo=archlinux&logoColor=white">
-  <img alt="Debian package" src="https://img.shields.io/badge/Debian%2013-.deb-A81D33?style=for-the-badge&logo=debian&logoColor=white">
+  <img alt="Debian package" src="https://img.shields.io/badge/Debian%2013-315%20KB-A81D33?style=for-the-badge&logo=debian&logoColor=white">
 </p>
 
 <p align="center">
