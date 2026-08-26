@@ -143,7 +143,14 @@ jobs:
       # Installing it is the only check that exercises what a reader actually
       # gets. --no-install-recommends deliberately withholds the font, so the
       # package has to stand up without it.
+      #
+      # shell: bash is not decoration. Steps in this container otherwise run
+      # under dash, and the octal permission test below is bash arithmetic;
+      # `8#755` is a syntax error to dash, which ended the step with
+      # "expecting EOF" after two checks had already printed ok. That reads
+      # like the package was at fault when the script was.
       - name: Install it, and check what it puts on disk
+        shell: bash
         run: |
           apt-get install -y --no-install-recommends ./dist/mergen_*.deb
 
