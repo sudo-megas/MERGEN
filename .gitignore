@@ -9,6 +9,18 @@
 *.pkg.tar.zst
 *.pkg.tar.zst.sig
 
+# Package artefacts from scripts/build-deb.sh. debhelper reads debian/ from the
+# root of the tree it builds, so the script copies packaging/debian up to /debian
+# for the duration; it builds in obj-<triplet>/, dpkg writes beside the tree, and
+# the script collects the result into dist/. None of it is source.
+/debian/
+/dist/
+/obj-*/
+*.deb
+*.ddeb
+*.buildinfo
+*.changes
+
 # Editor and tooling scratch.
 *.swp
 *~

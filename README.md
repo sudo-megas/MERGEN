@@ -7,6 +7,7 @@
 
 <p align="center">
   <img alt="Arch Linux package" src="https://img.shields.io/badge/Arch%20Linux-352%20KB-1793D1?style=for-the-badge&logo=archlinux&logoColor=white">
+  <img alt="Debian package" src="https://img.shields.io/badge/Debian%2013-.deb-A81D33?style=for-the-badge&logo=debian&logoColor=white">
 </p>
 
 <p align="center">
@@ -62,6 +63,40 @@ Or build from source:
 git clone https://github.com/sudo-megas/MERGEN.git
 cd MERGEN/packaging
 makepkg -si
+```
+
+### Debian
+
+Debian 13 (trixie) or newer. MERGEN needs Qt 6.5 and Debian 12 carries 6.4, so
+bookworm cannot build or run it.
+
+Download `mergen_2.0.6-1_amd64.deb` from the Releases page:
+
+```sh
+sudo apt install ./mergen_2.0.6-1_amd64.deb
+```
+
+`apt` rather than `dpkg -i`, so the Qt and poppler libraries it needs are
+brought in with it.
+
+One difference from the Arch package is worth knowing before you wonder what
+broke. The toolbar's icons are glyphs from the Nerd Font patch of Cascadia
+Code, and Debian does not carry that patch — only the unpatched
+`fonts-cascadia-code`, which the package recommends and which supplies the
+interface font. Without the patched build MERGEN labels its toolbar buttons
+with text rather than drawing a row of tofu boxes. Everything works; it reads
+differently. Installing [CaskaydiaCove Nerd
+Font](https://github.com/ryanoasis/nerd-fonts) by hand restores the icons.
+
+Or build the package from source, which is exactly what CI does:
+
+```sh
+git clone https://github.com/sudo-megas/MERGEN.git
+cd MERGEN
+sudo apt install devscripts equivs
+sudo mk-build-deps --install --remove packaging/debian/control
+./scripts/build-deb.sh
+sudo apt install ./dist/mergen_*.deb
 ```
 
 ---

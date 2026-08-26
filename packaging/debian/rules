@@ -1,0 +1,36 @@
+#!/usr/bin/make -f
+# MERGEN — a minimal PDF viewer.
+# Copyright (C) 2026 MEGAS.
+# SPDX-License-Identifier: GPL-3.0-only
+
+# Every hardening feature dpkg offers, rather than the default subset.
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+
+# No CMAKE_BUILD_TYPE is forced here, and that is deliberate. dh_auto_configure
+# passes -DCMAKE_BUILD_TYPE=None so that the compiler flags come from
+# dpkg-buildflags — -g -O2 plus the hardening above — rather than from CMake's
+# own Release preset. CMakeLists.txt only imposes Release when the build type is
+# empty, so it leaves that alone. dh_strip then moves the debug symbols into a
+# separate mergen-dbgsym package, which is why -g here costs the reader nothing.
+#
+# One consequence worth naming, because packaging/PKGBUILD argues the opposite
+# case for Arch: makepkg builds with LTO on, which drops the unreachable
+# redaction code and the libqpdf reference along with it, so the Arch package
+# has no libqpdf dependency. Debian does not enable LTO by default and this
+# package does not turn it on, so the binary here keeps its NEEDED entry and
+# dh_shlibdeps writes the matching runtime library into Depends. That is the
+# honest answer for this build rather than a claim inherited from another one:
+# the dependency is computed from the binary that ships. Adding optimize=+lto
+# to the line above would close the gap, and is the change to make if the
+# reference ever needs to go.
+%:
+	dh $@ --buildsystem=cmake+ninja
+
+# CMakeLists.txt installs the licence at /usr/share/licenses/mergen/LICENSE,
+# which is where Arch keeps it. On Debian the file of record is
+# /usr/share/doc/mergen/copyright, which dh_installdocs writes from
+# debian/copyright, and a second copy elsewhere is outside policy. Nothing at
+# runtime reads the file being removed: the About dialog compiles the licence
+# text in rather than depend on a path existing.
+execute_after_dh_auto_install:
+	rm -rf debian/mergen/usr/share/licenses

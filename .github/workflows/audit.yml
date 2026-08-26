@@ -89,3 +89,126 @@ jobs:
           useradd -m tester
           chown -R tester:tester .
           sudo -u tester -H bash build/docs/tests/run-all.sh
+
+  # The Debian package, built the way a Debian user would build it, on every
+  # push rather than only at a tag. Packaging rots quietly: a stale build
+  # dependency or a control file that no longer parses would otherwise be
+  # discovered by the release that needed it, which is the worst moment to find
+  # out. The audits that guard the privileged path run again here, against this
+  # build rather than the Arch one — Debian installs the helper under a
+  # multiarch libdir, so the three names for it resolve differently and are
+  # worth checking rather than assuming.
+  #
+  # Debian 13 (trixie) is the floor: CMakeLists.txt requires Qt 6.5, and
+  # bookworm carries 6.4.
+  debian:
+    runs-on: ubuntu-latest
+    container:
+      image: debian:trixie
+
+    steps:
+      - name: Install the toolchain
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential devscripts equivs lintian git ca-certificates
+
+      - name: Fetch the tree
+        uses: actions/checkout@v4
+
+      # Read out of packaging/debian/control rather than repeated here, so the
+      # two cannot drift apart.
+      - name: Install the build dependencies
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          DEBIAN_FRONTEND=noninteractive mk-build-deps --install --remove \
+            --tool 'apt-get -y --no-install-recommends' packaging/debian/control
+
+      - name: Build the package
+        run: bash scripts/build-deb.sh
+
+      - name: Dependencies
+        run: bash scripts/audit-deps.sh obj-x86_64-linux-gnu/mergen
+
+      - name: Privileged helper path
+        run: bash scripts/audit-policy.sh obj-x86_64-linux-gnu
+
+      # Errors fail the job; warnings and below are printed and left to a
+      # reader's judgement. The line between them is Debian's, not this
+      # project's, and treating every tag as fatal would make the archive's
+      # opinion about style into a build failure here.
+      - name: Lintian
+        run: lintian --fail-on error --no-tag-display-limit dist/mergen_*.deb
+
+      # Installing it is the only check that exercises what a reader actually
+      # gets. --no-install-recommends deliberately withholds the font, so the
+      # package has to stand up without it.
+      - name: Install it, and check what it puts on disk
+        run: |
+          apt-get install -y --no-install-recommends ./dist/mergen_*.deb
+
+          # Every check below runs and reports, and the step fails at the end on
+          # the count. Steps run under `bash -e`, which would otherwise end this
+          # one at the first failing test — printing no FAIL line for it and
+          # saying nothing at all about the checks after it.
+          set +e
+
+          fails=0
+          ok()   { printf "  ok    %s\n" "$1"; }
+          no()   { printf "  FAIL  %s\n" "$1"; fails=$((fails+1)); }
+          check() { if [ "$1" = 0 ]; then ok "$2"; else no "$2"; fi; }
+
+          echo "== the viewer =="
+          [ -x /usr/bin/mergen ]; check $? "/usr/bin/mergen is installed and executable"
+
+          echo "== the privileged helper, at the path the installed binary names =="
+          HELPER=$(strings -e l /usr/bin/mergen | grep -E '^/.*/mergen-open$' | head -1)
+          printf "    %s\n" "${HELPER:-<none found>}"
+          [ -n "$HELPER" ] && [ -x "$HELPER" ]
+          check $? "the helper is where the binary looks for it"
+
+          # Never setuid: polkit decides who may run it, not the filesystem.
+          if [ -n "$HELPER" ] && [ -e "$HELPER" ]; then
+              MODE=$(stat -c '%a' "$HELPER")
+              [ "$((8#$MODE & 8#6000))" -eq 0 ]
+              check $? "the helper is not setuid or setgid (mode $MODE)"
+          fi
+
+          echo "== and polkit authorises exactly that path =="
+          POLICY=/usr/share/polkit-1/actions/io.github.sudomegas.mergen.policy
+          if [ -f "$POLICY" ]; then
+              FROM_POLICY=$(grep -o 'org\.freedesktop\.policykit\.exec\.path">[^<]*' "$POLICY" \
+                            | sed 's/.*">//')
+              printf "    %s\n" "${FROM_POLICY:-<none found>}"
+              [ -n "$HELPER" ] && [ "$FROM_POLICY" = "$HELPER" ]
+              check $? "the policy names the same path the binary invokes"
+          else
+              no "the polkit action is installed"
+          fi
+
+          echo "== desktop integration =="
+          [ -f /usr/share/applications/mergen.desktop ]; check $? "the desktop entry"
+          [ -f /usr/share/icons/hicolor/scalable/apps/mergen.svg ]; check $? "the scalable icon"
+          [ -f /usr/share/icons/hicolor/256x256/apps/mergen.png ]; check $? "the 256px icon"
+
+          echo "== the licence is where Debian keeps it, and not also where Arch does =="
+          [ -f /usr/share/doc/mergen/copyright ]; check $? "/usr/share/doc/mergen/copyright"
+          [ ! -e /usr/share/licenses/mergen ]; check $? "no second copy under /usr/share/licenses"
+
+          echo "== nothing is missing at runtime =="
+          # Depends is computed by dh_shlibdeps from the binary; this is the
+          # check that the computation was right, and that no library the
+          # viewer loads went undeclared.
+          MISSING=$(ldd -r /usr/bin/mergen 2>&1 | grep 'not found' || true)
+          [ -z "$MISSING" ]; check $? "every shared library resolves"
+          if [ -n "$MISSING" ]; then printf "    %s\n" "$MISSING"; fi
+
+          if [ "$fails" -gt 0 ]; then printf "\n%d CHECK(S) FAILED\n" "$fails"; exit 1; fi
+          printf "\nclean\n"
+
+      - name: Keep the package
+        uses: actions/upload-artifact@v4
+        with:
+          name: mergen-deb
+          path: dist/*.deb
+          if-no-files-found: error

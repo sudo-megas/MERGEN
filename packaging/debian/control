@@ -1,0 +1,56 @@
+Source: mergen
+Section: text
+Priority: optional
+Maintainer: MEGAS <halil@namli.xyz>
+# qt6-base-dev already pulls libgl-dev, libglx-dev and libopengl-dev, so the
+# GL headers Qt6::Widgets needs are not listed again here.
+#
+# libqpdf-dev builds this package but the binary it produces may not load it —
+# see the note in debian/rules. It is a build dependency for the same reason it
+# is a makedepends in packaging/PKGBUILD: the source still has to compile and
+# link against it.
+Build-Depends: debhelper-compat (= 13),
+               cmake (>= 3.25),
+               ninja-build,
+               pkgconf,
+               qt6-base-dev (>= 6.5),
+               libpoppler-qt6-dev,
+               libqpdf-dev
+Standards-Version: 4.7.2
+Homepage: https://github.com/sudo-megas/MERGEN
+Vcs-Git: https://github.com/sudo-megas/MERGEN.git
+Vcs-Browser: https://github.com/sudo-megas/MERGEN
+Rules-Requires-Root: no
+
+Package: mergen
+Architecture: any
+# pkexec by name, not polkitd: the viewer invokes /usr/bin/pkexec by absolute
+# path, and Debian ships that binary in its own package. pkexec depends on
+# polkitd in turn, so the daemon arrives with it.
+#
+# Cascadia is only a Recommends here, where packaging/PKGBUILD makes it a hard
+# dependency. Debian carries fonts-cascadia-code but not the Nerd Font patch of
+# it, and the toolbar's icons are glyphs from the patched build. Without it the
+# interface font still resolves and the toolbar falls back to text labels,
+# which IconSet does deliberately rather than draw a tofu box.
+Depends: ${shlibs:Depends},
+         ${misc:Depends},
+         pkexec,
+         hicolor-icon-theme
+Recommends: fonts-cascadia-code
+Description: minimal PDF viewer for Wayland
+ MERGEN opens PDFs and refuses everything else on purpose. It has no update
+ check, no telemetry, no form filling, no signatures, no tabs, no settings and
+ no themes. The two colours on screen come from the system palette rather than
+ from the application deciding for you.
+ .
+ It reads continuously, zooms and rotates, searches the whole document, selects
+ and copies text, and prints with page ranges. It compares two revisions side
+ by side with the differences marked, carries reader-made two-way links between
+ locations, inverts lightness for night reading while keeping colours true, and
+ reloads a file when it changes on disk. Root-owned files open by asking polkit
+ for elevation rather than by running privileged. A Unix socket lets a tiling
+ window manager drive it from a keybinding.
+ .
+ Written in C++20 against Qt6 and poppler, with no KDE Frameworks and no
+ desktop-environment dependencies.

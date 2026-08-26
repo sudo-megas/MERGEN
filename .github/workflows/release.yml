@@ -42,11 +42,102 @@ jobs:
       - name: Publish to the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Held in a block scalar rather than written inline: the notes are
+          # several lines of Markdown, and folding them into the command would
+          # put their indentation into the released text.
+          NOTES: |
+            A minimal PDF viewer. Wayland only.
+
+            - Arch Linux: `mergen-*-x86_64.pkg.tar.zst`
+            - Debian 13 (trixie) or newer: `mergen_*_amd64.deb`
         run: |
           gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
             || gh release create "$GITHUB_REF_NAME" \
                  --repo "$GITHUB_REPOSITORY" \
                  --title "MERGEN $GITHUB_REF_NAME" \
-                 --notes "A minimal PDF viewer for Arch Linux. Wayland only."
+                 --notes "$NOTES"
           gh release upload "$GITHUB_REF_NAME" ./*.pkg.tar.zst \
+            --repo "$GITHUB_REPOSITORY" --clobber
+
+  # Debian 13 (trixie) is the floor: CMakeLists.txt requires Qt 6.5, and
+  # bookworm carries 6.4. The same build runs on every push in audit.yml; what
+  # this job adds is the tag, and the check that the tag and the package agree
+  # about which version this is.
+  deb:
+    runs-on: ubuntu-latest
+    container:
+      image: debian:trixie
+
+    steps:
+      - name: Install the toolchain
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential devscripts equivs lintian git ca-certificates
+
+      - name: Fetch the tagged tree
+        uses: actions/checkout@v4
+
+      - name: Install the build dependencies
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          DEBIAN_FRONTEND=noninteractive mk-build-deps --install --remove \
+            --tool 'apt-get -y --no-install-recommends' packaging/debian/control
+
+      # build-deb.sh already refuses to build when CMakeLists.txt, PKGBUILD and
+      # debian/changelog disagree. The tag is the fourth name for the same
+      # version, and it is only knowable here.
+      - name: The tag and the changelog must name one version
+        run: |
+          FROM_CHANGELOG=$(dpkg-parsechangelog -l packaging/debian/changelog -S Version)
+          UPSTREAM=${FROM_CHANGELOG%-*}
+          printf "  tag                 %s\n" "$GITHUB_REF_NAME"
+          printf "  debian/changelog    %s (upstream %s)\n" "$FROM_CHANGELOG" "$UPSTREAM"
+          if [ "v$UPSTREAM" != "$GITHUB_REF_NAME" ]; then
+              echo "FAIL: the tag and the changelog name different versions"
+              exit 1
+          fi
+          echo "  ok"
+
+      - name: Build the package
+        run: bash scripts/build-deb.sh
+
+      - name: Dependencies
+        run: bash scripts/audit-deps.sh obj-x86_64-linux-gnu/mergen
+
+      - name: Privileged helper path
+        run: bash scripts/audit-policy.sh obj-x86_64-linux-gnu
+
+      - name: Lintian
+        run: lintian --fail-on error --no-tag-display-limit dist/mergen_*.deb
+
+      # Handed to the next job rather than published from here: gh is not in
+      # Debian's archive, and the runner already has it outside the container.
+      - name: Hand the package on
+        uses: actions/upload-artifact@v4
+        with:
+          name: mergen-deb
+          path: dist/mergen_*.deb
+          if-no-files-found: error
+
+  # Separate from the job that builds it, because publishing needs two things
+  # that are not true inside debian:trixie: gh, and a release to upload to. The
+  # package job is what creates the release, so wait for both.
+  publish-deb:
+    needs: [package, deb]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Collect the package
+        uses: actions/download-artifact@v4
+        with:
+          name: mergen-deb
+          path: dist
+
+      - name: Publish to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ls -la dist/
+          gh release upload "$GITHUB_REF_NAME" dist/mergen_*.deb \
             --repo "$GITHUB_REPOSITORY" --clobber

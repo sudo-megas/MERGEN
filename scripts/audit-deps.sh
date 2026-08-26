@@ -30,6 +30,14 @@ check_one() {
 }
 
 # Both installed binaries, not just the viewer.
-check_one "${1:-build/mergen}" || status=1
-[ -x build/mergen-open ] && { check_one build/mergen-open || status=1; }
+#
+# The helper is looked for beside whichever viewer was named rather than under
+# build/ unconditionally. The Debian package builds in obj-<triplet>/, and with
+# the path fixed here that build had its viewer audited while its helper was
+# quietly skipped — a check that reports "ok" having examined one of the two
+# binaries it names.
+VIEWER="${1:-build/mergen}"
+check_one "$VIEWER" || status=1
+HELPER="$(dirname "$VIEWER")/mergen-open"
+[ -x "$HELPER" ] && { check_one "$HELPER" || status=1; }
 exit $status
