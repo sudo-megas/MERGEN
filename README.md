@@ -21,7 +21,7 @@
 
 ## 1. DESCRIPTION
 
-MERGEN opens PDFs on Arch Linux and Wayland — reads them continuously, zooms and rotates them, searches them, selects text from them, and prints them — and refuses everything else on purpose. It has no update check, no telemetry, no form filling, no signatures, no tabs, no settings, no themes. The two colours on your screen come from your system palette, not from the application deciding for you. The refusal is the selling point.
+MERGEN opens PDFs on Arch Linux / Debian and Wayland — reads them continuously, zooms and rotates them, searches them, selects text from them, and prints them — and refuses everything else on purpose. It has no update check, no telemetry, no form filling, no signatures, no tabs, no settings, no themes. The two colours on your screen come from your system palette, not from the application deciding for you. The refusal is the selling point.
 
 **What it does:**
 
